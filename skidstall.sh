@@ -60,18 +60,19 @@ PACMAN_UI=(
   feh rofi thunar kitty 
   maim xclip dunst btop firefox
   picom
+  gtk3 gtk4
   ttf-fira-code ttf-jetbrains-mono-nerd ttf-font-awesome
   papirus-icon-theme
 )
 
 # UI packages that may need AUR
 AUR_UI=(
-  polybar i3-gaps
+  polybar
 )
 
 # Optional UI (try AUR if not in repos)
 OPTIONAL_UI=(
-  nitrogen
+  nitrogen i3-gaps
 )
 
 # Pentest tools - depends on python being installed
@@ -79,7 +80,7 @@ PACMAN_PENTEST=(
   nmap masscan wireshark-qt 
   john hashcat sqlmap gobuster nikto
   aircrack-ng hydra openbsd-netcat openvpn 
-  smbclient cifs-utils enum4linux 
+  smbclient cifs-utils
   bind tcpdump net-tools iproute2
   exploitdb proxychains-ng socat
   radare2 strace ltrace gdb 
@@ -90,10 +91,16 @@ PACMAN_PENTEST=(
 # Pentest packages that moved to AUR
 AUR_PENTEST=(
   burpsuite feroxbuster rustscan 
-  kerbrute-bin chisel 
+  chisel 
+  seclists ffuf
+)
+
+# Optional pentest tools (may fail)
+AUR_PENTEST_OPTIONAL=(
+  kerbrute-bin
   nuclei subfinder httpx-toolkit 
   waybackurls gau gospider
-  seclists ffuf
+  enum4linux
 )
 
 # Networking tools
@@ -164,16 +171,16 @@ confirm() {
   [[ "$ans" =~ ^([yY][eE][sS]|[yY])$ ]]
 }
 
-# Package availability check
+# Package availability check with timeout
 check_pacman_package() {
   local pkg="$1"
-  pacman -Si "$pkg" &>/dev/null
+  timeout 5 pacman -Si "$pkg" &>/dev/null
 }
 
 check_aur_package() {
   local pkg="$1"
-  # Check if package exists in AUR
-  curl -s "https://aur.archlinux.org/rpc/?v=5&type=info&arg=${pkg}" | grep -q '"resultcount":1'
+  # Check if package exists in AUR with timeout
+  timeout 10 curl -s "https://aur.archlinux.org/rpc/?v=5&type=info&arg=${pkg}" 2>/dev/null | grep -q '"resultcount":1'
 }
 
 is_package_installed() {
@@ -203,14 +210,16 @@ ensure_yay() {
   mkdir -p "$tmpdir"
   cd "$tmpdir"
   
-  if ! git clone https://aur.archlinux.org/yay.git; then
-    err "Failed to clone yay repository"
+  info "Cloning yay repository (this may take a moment)..."
+  if ! timeout 120 git clone --depth=1 https://aur.archlinux.org/yay.git 2>&1 | tee -a "$INSTALL_LOG"; then
+    err "Failed to clone yay repository (timeout or network error)"
     cd - >/dev/null
     return 1
   fi
   
   cd yay
-  if ! makepkg -si --noconfirm; then
+  info "Building yay..."
+  if ! timeout 300 makepkg -si --noconfirm 2>&1 | tee -a "$INSTALL_LOG"; then
     err "Failed to build yay"
     cd - >/dev/null
     return 1
@@ -263,7 +272,7 @@ install_pacman_pkgs(){
       info "  ✓ $pkg (available)"
     else
       invalid_pkgs+=("$pkg")
-      warn "  ✗ $pkg (not in repos, will try AUR)"
+      warn "  ✗ $pkg (not in repos or timeout)"
       FAILED_PACKAGES+=("$pkg")
     fi
   done
@@ -316,13 +325,14 @@ install_aur_pkgs(){
     # Check if package exists in AUR
     info "  Checking $pkg availability in AUR..."
     if ! check_aur_package "$pkg"; then
-      warn "  ✗ $pkg not found in AUR"
+      warn "  ✗ $pkg not found in AUR (skipping)"
       FAILED_PACKAGES+=("$pkg")
       continue
     fi
     
-    info "  Installing $pkg from AUR..."
-    if yay -S --noconfirm --needed "$pkg" 2>&1 | tee -a "$INSTALL_LOG"; then
+    info "  Installing $pkg from AUR (this may take several minutes)..."
+    # Use timeout to prevent infinite hangs
+    if timeout 600 yay -S --noconfirm --needed "$pkg" 2>&1 | tee -a "$INSTALL_LOG"; then
       if is_package_installed "$pkg"; then
         log "  ✓ $pkg installed successfully"
         SUCCESSFUL_PACKAGES+=("$pkg")
@@ -331,7 +341,7 @@ install_aur_pkgs(){
         FAILED_PACKAGES+=("$pkg")
       fi
     else
-      warn "  ✗ Failed to install $pkg from AUR"
+      warn "  ✗ Failed to install $pkg from AUR (timeout or error)"
       FAILED_PACKAGES+=("$pkg")
     fi
   done
@@ -352,7 +362,7 @@ install_optional_pkgs(){
     # Try pacman first
     if check_pacman_package "$pkg"; then
       info "  Trying $pkg from official repos..."
-      if sudo pacman -S --noconfirm --needed "$pkg" 2>/dev/null; then
+      if timeout 120 sudo pacman -S --noconfirm --needed "$pkg" 2>/dev/null; then
         log "  ✓ $pkg installed"
         SUCCESSFUL_PACKAGES+=("$pkg")
         continue
@@ -362,7 +372,7 @@ install_optional_pkgs(){
     # Try AUR if pacman failed
     if command -v yay &>/dev/null; then
       info "  Trying $pkg from AUR..."
-      if yay -S --noconfirm --needed "$pkg" 2>/dev/null; then
+      if timeout 600 yay -S --noconfirm --needed "$pkg" 2>/dev/null; then
         log "  ✓ $pkg installed from AUR"
         SUCCESSFUL_PACKAGES+=("$pkg")
       else
@@ -388,7 +398,7 @@ install_pipx_tools(){
     fi
     
     log "  Installing $tool via pipx..."
-    if pipx install "$tool" 2>&1 | tee -a "$INSTALL_LOG"; then
+    if timeout 300 pipx install "$tool" 2>&1 | tee -a "$INSTALL_LOG"; then
       log "  ✓ $tool installed"
       SUCCESSFUL_PACKAGES+=("pipx:$tool")
     else
@@ -406,7 +416,7 @@ install_pip_user_tools(){
   
   for tool in "${tools[@]}"; do
     info "  Installing $tool..."
-    if python -m pip install --user "$tool" 2>&1 | tee -a "$INSTALL_LOG"; then
+    if timeout 180 python -m pip install --user "$tool" 2>&1 | tee -a "$INSTALL_LOG"; then
       log "  ✓ $tool installed"
       SUCCESSFUL_PACKAGES+=("pip:$tool")
     else
@@ -521,7 +531,7 @@ module_ui(){
   # Download HTB-style wallpaper
   info "Downloading Nord wallpaper..."
   mkdir -p ~/Pictures
-  if curl -fsSL "https://raw.githubusercontent.com/linuxdotexe/nordic-wallpapers/master/wallpapers/nord-neon-mountains.png" \
+  if timeout 30 curl -fsSL "https://raw.githubusercontent.com/linuxdotexe/nordic-wallpapers/master/wallpapers/nord-neon-mountains.png" \
        -o ~/Pictures/wallpaper.jpg 2>/dev/null; then
     log "Wallpaper downloaded"
   else
@@ -945,8 +955,9 @@ module_pentest(){
   install_aur_pkgs "${AUR_PENTEST[@]}"
   
   # Optional AUR packages
-  info "Installing optional AUR tools..."
-  install_aur_pkgs "${AUR_OPTIONAL[@]}"
+  info "Installing optional AUR tools (may take time)..."
+  install_optional_pkgs "${AUR_PENTEST_OPTIONAL[@]}"
+  install_optional_pkgs "${AUR_OPTIONAL[@]}"
   
   # Install pipx tools
   install_pipx_tools "${PIPX_TOOLS[@]}"
@@ -957,7 +968,7 @@ module_pentest(){
   # Setup Metasploit database
   info "Initializing Metasploit database..."
   if command -v msfdb &>/dev/null; then
-    msfdb init 2>&1 | tee -a "$INSTALL_LOG" || warn "msfdb init failed (non-critical)"
+    timeout 120 msfdb init 2>&1 | tee -a "$INSTALL_LOG" || warn "msfdb init failed (non-critical)"
   fi
   
   log "[pentest] Done."
@@ -977,7 +988,7 @@ module_lazyvim(){
   
   # Clone LazyVim starter
   info "Cloning LazyVim starter..."
-  git clone https://github.com/LazyVim/starter ~/.config/nvim
+  timeout 60 git clone --depth=1 https://github.com/LazyVim/starter ~/.config/nvim
   rm -rf ~/.config/nvim/.git
   
   # Create custom config
@@ -1358,7 +1369,7 @@ module_theming(){
   # GTK theme (optional)
   if command -v yay &>/dev/null; then
     info "Installing Nordic GTK theme..."
-    yay -S --noconfirm nordic-theme 2>&1 | tee -a "$INSTALL_LOG" || warn "Nordic theme not available"
+    timeout 600 yay -S --noconfirm nordic-theme 2>&1 | tee -a "$INSTALL_LOG" || warn "Nordic theme not available"
   fi
   
   # Set GTK settings
