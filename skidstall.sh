@@ -22,9 +22,10 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 # Installation tracking
-INSTALL_LOG="/tmp/skidstall-$$.log"
+INSTALL_LOG="/tmp/skidstall-$.log"
 FAILED_PACKAGES=()
 SUCCESSFUL_PACKAGES=()
+DEFERRED_PACKAGES=()  # Packages to handle after main installation
 
 # Auto mode flag
 AUTO=false
@@ -219,20 +220,25 @@ pacman_search() {
   pacman -Ss "$term" 2>/dev/null | awk -F'/' '/^[a-z]/{print $2}' | awk '{print $1}' || true
 }
 
-# Try to resolve a missing package by searching repos and AUR, then prompting or auto-installing
+# Try to resolve a missing package by searching repos and AUR
 fallback_search() {
   local pkg="$1"
+  
+  if $AUTO; then
+    # In auto mode, just defer for later
+    warn "Package '${pkg}' not found - deferring for post-install review"
+    DEFERRED_PACKAGES+=("$pkg")
+    return 1
+  fi
+  
+  # Interactive mode - offer to search now
   echo ""
   warn "Package '${pkg}' not found in official repos."
-
-  if $AUTO; then
-    info "AUTO mode: searching for alternatives for '${pkg}'..."
-  else
-    if ! confirm "Search AUR/alternatives for '${pkg}'?"; then
-      warn "Skipping ${pkg}"
-      FAILED_PACKAGES+=("$pkg")
-      return 1
-    fi
+  
+  if ! confirm "Search AUR/alternatives for '${pkg}' now?"; then
+    info "Deferring ${pkg} for later"
+    DEFERRED_PACKAGES+=("$pkg")
+    return 1
   fi
 
   # Gather matches
@@ -244,42 +250,33 @@ fallback_search() {
 
   if [ ${#matches[@]} -eq 0 ]; then
     warn "No alternatives found for ${pkg}"
-    FAILED_PACKAGES+=("$pkg")
+    DEFERRED_PACKAGES+=("$pkg")
     return 1
   fi
 
   echo ""
-  info "Found alternatives for ${pkg}:"
+  info "Found ${#matches[@]} alternatives for ${pkg}:"
+  
   local i=1
   for m in "${matches[@]}"; do
     echo "  $i) $m"
     ((i++))
   done
-
-  local choice_index=1
-  if ! $AUTO; then
-    read -rp "Select package to install (1-${#matches[@]}, 0 to skip): " choice_index
-    if [[ -z "$choice_index" ]]; then
-      warn "No choice given. Skipping ${pkg}."
-      FAILED_PACKAGES+=("$pkg")
-      return 1
-    fi
-  fi
-
-  if [[ "$choice_index" -eq 0 ]]; then
-    warn "User skipped ${pkg}"
-    FAILED_PACKAGES+=("$pkg")
+  
+  read -rp "Select package to install (1-${#matches[@]}, 0 to skip): " choice_index
+  
+  if [[ -z "$choice_index" ]] || [[ "$choice_index" -eq 0 ]]; then
+    info "Deferring ${pkg} for later"
+    DEFERRED_PACKAGES+=("$pkg")
     return 1
   fi
-
-  if ! $AUTO; then
-    if ! [[ "$choice_index" =~ ^[0-9]+$ ]] || [ "$choice_index" -lt 1 ] || [ "$choice_index" -gt ${#matches[@]} ]; then
-      warn "Invalid selection. Skipping ${pkg}"
-      FAILED_PACKAGES+=("$pkg")
-      return 1
-    fi
+  
+  if ! [[ "$choice_index" =~ ^[0-9]+$ ]] || [ "$choice_index" -lt 1 ] || [ "$choice_index" -gt ${#matches[@]} ]; then
+    warn "Invalid selection. Deferring ${pkg}"
+    DEFERRED_PACKAGES+=("$pkg")
+    return 1
   fi
-
+  
   local selected="${matches[$((choice_index-1))]}"
   info "Selected fallback: $selected"
 
@@ -295,7 +292,7 @@ fallback_search() {
   fi
 
   # Try AUR (ensure yay)
-  ensure_yay || { warn "yay not available; cannot install AUR packages"; FAILED_PACKAGES+=("$pkg"); return 1; }
+  ensure_yay || { warn "yay not available; cannot install AUR packages"; DEFERRED_PACKAGES+=("$pkg"); return 1; }
 
   if check_aur_package "$selected"; then
     info "Installing $selected from AUR..."
@@ -304,13 +301,13 @@ fallback_search() {
       return 0
     else
       warn "AUR install failed for $selected"
-      FAILED_PACKAGES+=("$pkg")
+      DEFERRED_PACKAGES+=("$pkg")
       return 1
     fi
   fi
 
   warn "Selected fallback $selected not available"
-  FAILED_PACKAGES+=("$pkg")
+  DEFERRED_PACKAGES+=("$pkg")
   return 1
 }
 
@@ -552,6 +549,102 @@ install_pip_user_tools(){
   done
 }
 
+# Handle deferred packages after main installation
+handle_deferred_packages(){
+  if [ ${#DEFERRED_PACKAGES[@]} -eq 0 ]; then
+    return 0
+  fi
+  
+  echo ""
+  echo -e "${YELLOW}╔════════════════════════════════════════════════════╗${NC}"
+  echo -e "${YELLOW}║      Deferred Package Resolution                  ║${NC}"
+  echo -e "${YELLOW}╚════════════════════════════════════════════════════╝${NC}"
+  echo ""
+  
+  warn "The following ${#DEFERRED_PACKAGES[@]} packages were not found and need your attention:"
+  for pkg in "${DEFERRED_PACKAGES[@]}"; do
+    echo "  - $pkg"
+  done
+  echo ""
+  
+  if $AUTO; then
+    info "AUTO mode: Skipping deferred package resolution"
+    info "Run the script interactively to resolve these packages"
+    return 0
+  fi
+  
+  if ! confirm "Would you like to search for alternatives now?"; then
+    info "You can manually install these packages later with:"
+    info "  pacman -S <package> or yay -S <package>"
+    return 0
+  fi
+  
+  for pkg in "${DEFERRED_PACKAGES[@]}"; do
+    echo ""
+    log "Searching alternatives for: $pkg"
+    
+    # Gather matches
+    local matches=()
+    mapfile -t repo_matches < <(pacman_search "${pkg}")
+    mapfile -t aur_matches < <(aur_search "${pkg}")
+    matches=("${repo_matches[@]}" "${aur_matches[@]}")
+    
+    if [ ${#matches[@]} -eq 0 ]; then
+      warn "No alternatives found for ${pkg}"
+      FAILED_PACKAGES+=("$pkg")
+      continue
+    fi
+    
+    info "Found ${#matches[@]} alternatives:"
+    local i=1
+    for m in "${matches[@]}"; do
+      echo "  $i) $m"
+      ((i++))
+    done
+    
+    read -rp "Select package (1-${#matches[@]}, 0 to skip): " choice
+    
+    if [[ -z "$choice" ]] || [[ "$choice" -eq 0 ]]; then
+      warn "Skipped ${pkg}"
+      FAILED_PACKAGES+=("$pkg")
+      continue
+    fi
+    
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#matches[@]} ]; then
+      warn "Invalid selection for ${pkg}"
+      FAILED_PACKAGES+=("$pkg")
+      continue
+    fi
+    
+    local selected="${matches[$((choice-1))]}"
+    info "Installing $selected..."
+    
+    # Try pacman first
+    if check_pacman_package "$selected"; then
+      if sudo pacman -S --noconfirm --needed "$selected" 2>&1 | tee -a "$INSTALL_LOG"; then
+        log "✓ $selected installed"
+        SUCCESSFUL_PACKAGES+=("$selected")
+        continue
+      fi
+    fi
+    
+    # Try AUR
+    if command -v yay &>/dev/null && check_aur_package "$selected"; then
+      if yay -S --noconfirm --needed "$selected" </dev/tty 2>&1 | tee -a "$INSTALL_LOG"; then
+        log "✓ $selected installed from AUR"
+        SUCCESSFUL_PACKAGES+=("$selected")
+        continue
+      fi
+    fi
+    
+    warn "Failed to install $selected"
+    FAILED_PACKAGES+=("$pkg")
+  done
+  
+  # Clear deferred list as we've processed them
+  DEFERRED_PACKAGES=()
+}
+
 # Show installation summary
 show_install_summary(){
   echo ""
@@ -564,6 +657,15 @@ show_install_summary(){
     log "Successfully installed: ${#SUCCESSFUL_PACKAGES[@]} packages"
   fi
   
+  if [ ${#DEFERRED_PACKAGES[@]} -gt 0 ]; then
+    warn "Deferred packages: ${#DEFERRED_PACKAGES[@]}"
+    echo "The following packages were deferred:"
+    for pkg in "${DEFERRED_PACKAGES[@]}"; do
+      echo "  - $pkg"
+    done
+    echo ""
+  fi
+  
   if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
     warn "Failed packages: ${#FAILED_PACKAGES[@]}"
     echo ""
@@ -574,7 +676,9 @@ show_install_summary(){
     echo ""
     warn "Some functionality may be limited"
   else
-    log "All packages installed successfully!"
+    if [ ${#DEFERRED_PACKAGES[@]} -eq 0 ]; then
+      log "All packages installed successfully!"
+    fi
   fi
   
   info "Full log available at: $INSTALL_LOG"
@@ -1339,9 +1443,49 @@ run_modules(){
   done
 }
 
+# Safety check for fresh installations
+check_fresh_install(){
+  # Check if system was just installed (less than 1 hour uptime)
+  local uptime_seconds=$(awk '{print int($1)}' /proc/uptime)
+  local uptime_hours=$((uptime_seconds / 3600))
+  
+  # Check if this is first boot after install
+  if [ $uptime_hours -lt 1 ] && [ ! -f /var/lib/skidstall-ran ]; then
+    warn "⚠️  FRESH INSTALLATION DETECTED"
+    echo ""
+    echo -e "${YELLOW}This appears to be a fresh Arch installation.${NC}"
+    echo -e "${YELLOW}Running a full system upgrade immediately after archinstall${NC}"
+    echo -e "${YELLOW}can sometimes cause boot issues.${NC}"
+    echo ""
+    echo -e "${CYAN}RECOMMENDED WORKFLOW:${NC}"
+    echo "  1. Run 'sudo pacman -Syu' manually first"
+    echo "  2. Reboot to ensure system is stable"
+    echo "  3. Then run this script"
+    echo ""
+    
+    if ! $AUTO; then
+      if ! confirm "Continue anyway? (Not recommended)"; then
+        info "Installation cancelled. Run the script after a manual system update."
+        exit 0
+      fi
+      warn "Proceeding at your own risk..."
+    else
+      err "AUTO mode blocked on fresh install for safety"
+      info "Run manually with system update first, then use --auto"
+      exit 1
+    fi
+  fi
+  
+  # Create marker file
+  sudo touch /var/lib/skidstall-ran 2>/dev/null || true
+}
+
 main(){
   show_banner
   parse_args "$@"
+  
+  # Safety check for fresh installations
+  check_fresh_install
   
   # Interactive mode if no modules specified
   if [ ${#SELECTED_MODULES[@]} -eq 0 ]; then
@@ -1365,6 +1509,9 @@ main(){
   
   # Run selected modules
   run_modules
+  
+  # Handle any deferred packages
+  handle_deferred_packages
   
   # Show summary
   show_install_summary
