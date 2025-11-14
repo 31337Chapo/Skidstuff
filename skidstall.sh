@@ -59,7 +59,8 @@ PACMAN_DEV=(
 
 # UI packages - needs fonts and base X
 PACMAN_UI=(
-  xorg xorg-xinit i3-wm i3status i3lock
+  xorg-server xorg-xinit xorg-xrandr xorg-xsetroot
+  i3-wm i3status i3lock
   feh rofi thunar kitty 
   maim xclip dunst btop firefox
   picom
