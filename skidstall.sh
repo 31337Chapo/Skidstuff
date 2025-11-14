@@ -52,7 +52,7 @@ PACMAN_CORE=(
 PACMAN_DEV=(
   python python-pip python-setuptools python-wheel
   python-virtualenv python-pipx
-  go rust cargo nodejs npm 
+  go rust nodejs npm 
   jq yq fd ripgrep
   neovim tmux screen
 )
@@ -65,7 +65,7 @@ PACMAN_UI=(
   maim xclip dunst btop firefox
   picom
   gtk3 gtk4
-  ttf-fira-code ttf-jetbrains-mono-nerd ttf-font-awesome-6
+  ttf-fira-code ttf-jetbrains-mono-nerd otf-font-awesome
   papirus-icon-theme
 )
 
@@ -76,7 +76,7 @@ AUR_UI=(
 
 # Optional UI (try AUR if not in repos)
 OPTIONAL_UI=(
-  nitrogen i3-gaps
+  nitrogen
 )
 
 # Pentest tools - depends on python being installed
@@ -95,21 +95,21 @@ PACMAN_PENTEST=(
 # Pentest packages that moved to AUR
 AUR_PENTEST=(
   burpsuite feroxbuster rustscan 
-  chisel 
+  chisel-bin
   seclists ffuf
 )
 
 # Optional pentest tools (may fail)
 AUR_PENTEST_OPTIONAL=(
   kerbrute-bin
-  nuclei subfinder httpx-toolkit 
+  nuclei subfinder httpx 
   waybackurls gau gospider
   enum4linux
 )
 
 # Networking tools
 PACMAN_NETWORKING=(
-  openssh iperf3 traceroute ufw inetutils
+  openssh iperf3 traceroute inetutils
 )
 
 # Docker
