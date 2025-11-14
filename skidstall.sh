@@ -3,6 +3,7 @@
 # - Interactive CLI by default, --auto for unattended
 # - Modules installed in correct dependency order automatically
 # - HTB-inspired Neon Nord theme (green #9fef00 + Nord palette)
+# - Package validation and integrity checks
 #
 # Usage examples:
 #   ./skidstall.sh               # interactive CLI
@@ -19,6 +20,11 @@ PURPLE='\033[0;35m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
+
+# Installation tracking
+INSTALL_LOG="/tmp/skidstall-$$.log"
+FAILED_PACKAGES=()
+SUCCESSFUL_PACKAGES=()
 
 # ------------------ Banner ------------------
 show_banner(){
@@ -50,12 +56,22 @@ PACMAN_DEV=(
 
 # UI packages - needs fonts and base X
 PACMAN_UI=(
-  xorg xorg-xinit i3-gaps i3status i3lock
-  feh nitrogen rofi thunar kitty 
+  xorg xorg-xinit i3-wm i3status i3lock
+  feh rofi thunar kitty 
   maim xclip dunst btop firefox
   picom
   ttf-fira-code ttf-jetbrains-mono-nerd ttf-font-awesome
   papirus-icon-theme
+)
+
+# UI packages that may need AUR
+AUR_UI=(
+  polybar i3-gaps
+)
+
+# Optional UI (try AUR if not in repos)
+OPTIONAL_UI=(
+  nitrogen
 )
 
 # Pentest tools - depends on python being installed
@@ -65,10 +81,19 @@ PACMAN_PENTEST=(
   aircrack-ng hydra openbsd-netcat openvpn 
   smbclient cifs-utils enum4linux 
   bind tcpdump net-tools iproute2
-  exploitdb seclists proxychains-ng socat ffuf
+  exploitdb proxychains-ng socat
   radare2 strace ltrace gdb 
   binwalk foremost exiftool
   metasploit
+)
+
+# Pentest packages that moved to AUR
+AUR_PENTEST=(
+  burpsuite feroxbuster rustscan 
+  kerbrute-bin chisel 
+  nuclei subfinder httpx-toolkit 
+  waybackurls gau gospider
+  seclists ffuf
 )
 
 # Networking tools
@@ -90,18 +115,6 @@ PACMAN_VMTOOLS=(
 PACMAN_VPN=(
   openvpn wireguard-tools 
   networkmanager networkmanager-openvpn
-)
-
-# AUR packages (installed AFTER yay)
-AUR_UI=(
-  polybar
-)
-
-AUR_PENTEST=(
-  burpsuite feroxbuster rustscan 
-  kerbrute-bin chisel 
-  nuclei subfinder httpx-toolkit 
-  waybackurls gau gospider
 )
 
 # Optional AUR (may fail, non-critical)
@@ -140,15 +153,32 @@ MODULE_EXECUTION_ORDER=(
 AVAILABLE_MODULES=("${MODULE_EXECUTION_ORDER[@]}")
 
 # ------------------ Helpers ------------------
-log() { echo -e "${GREEN}[+]${NC} $*"; }
-warn() { echo -e "${YELLOW}[!]${NC} $*"; }
-err() { echo -e "${RED}[✗]${NC} $*" >&2; }
-info() { echo -e "${CYAN}[i]${NC} $*"; }
+log() { echo -e "${GREEN}[+]${NC} $*" | tee -a "$INSTALL_LOG"; }
+warn() { echo -e "${YELLOW}[!]${NC} $*" | tee -a "$INSTALL_LOG"; }
+err() { echo -e "${RED}[✗]${NC} $*" | tee -a "$INSTALL_LOG" >&2; }
+info() { echo -e "${CYAN}[i]${NC} $*" | tee -a "$INSTALL_LOG"; }
 
 confirm() {
   local prompt="$1"
   read -r -p "$prompt [y/N]: " ans
   [[ "$ans" =~ ^([yY][eE][sS]|[yY])$ ]]
+}
+
+# Package availability check
+check_pacman_package() {
+  local pkg="$1"
+  pacman -Si "$pkg" &>/dev/null
+}
+
+check_aur_package() {
+  local pkg="$1"
+  # Check if package exists in AUR
+  curl -s "https://aur.archlinux.org/rpc/?v=5&type=info&arg=${pkg}" | grep -q '"resultcount":1'
+}
+
+is_package_installed() {
+  local pkg="$1"
+  pacman -Qi "$pkg" &>/dev/null || yay -Qi "$pkg" &>/dev/null 2>&1
 }
 
 ensure_sudo() {
@@ -211,17 +241,59 @@ ensure_pipx() {
   fi
 }
 
+# Enhanced package installation with validation
 install_pacman_pkgs(){
   local pkgs=("$@")
   if [ ${#pkgs[@]} -eq 0 ]; then return 0; fi
   
-  log "Installing ${#pkgs[@]} packages via pacman..."
+  log "Validating ${#pkgs[@]} packages before installation..."
   
-  # Try to install, continue on non-critical failures
-  if ! sudo pacman -S --noconfirm --needed "${pkgs[@]}"; then
-    warn "Some pacman packages failed to install (may be missing from repos)"
-    return 1
+  local valid_pkgs=()
+  local invalid_pkgs=()
+  local already_installed=()
+  
+  # Validate each package
+  for pkg in "${pkgs[@]}"; do
+    if is_package_installed "$pkg"; then
+      already_installed+=("$pkg")
+      info "  ✓ $pkg (already installed)"
+      SUCCESSFUL_PACKAGES+=("$pkg")
+    elif check_pacman_package "$pkg"; then
+      valid_pkgs+=("$pkg")
+      info "  ✓ $pkg (available)"
+    else
+      invalid_pkgs+=("$pkg")
+      warn "  ✗ $pkg (not in repos, will try AUR)"
+      FAILED_PACKAGES+=("$pkg")
+    fi
+  done
+  
+  # Install valid packages
+  if [ ${#valid_pkgs[@]} -gt 0 ]; then
+    log "Installing ${#valid_pkgs[@]} validated packages..."
+    if sudo pacman -S --noconfirm --needed "${valid_pkgs[@]}" 2>&1 | tee -a "$INSTALL_LOG"; then
+      SUCCESSFUL_PACKAGES+=("${valid_pkgs[@]}")
+      log "Successfully installed ${#valid_pkgs[@]} packages"
+    else
+      warn "Some packages failed during installation"
+      # Try to identify which ones failed
+      for pkg in "${valid_pkgs[@]}"; do
+        if ! is_package_installed "$pkg"; then
+          FAILED_PACKAGES+=("$pkg")
+        fi
+      done
+    fi
   fi
+  
+  # Report on invalid packages
+  if [ ${#invalid_pkgs[@]} -gt 0 ]; then
+    warn "The following packages are not available in repos:"
+    for pkg in "${invalid_pkgs[@]}"; do
+      echo "    - $pkg"
+    done
+    warn "These will be attempted via AUR if available"
+  fi
+  
   return 0
 }
 
@@ -235,14 +307,69 @@ install_aur_pkgs(){
   
   # Install individually to avoid one failure breaking all
   for pkg in "${pkgs[@]}"; do
-    if yay -Qi "$pkg" &>/dev/null; then
-      info "$pkg already installed (skipping)"
+    if is_package_installed "$pkg"; then
+      info "  ✓ $pkg already installed (skipping)"
+      SUCCESSFUL_PACKAGES+=("$pkg")
       continue
     fi
     
-    info "Installing $pkg from AUR..."
-    if ! yay -S --noconfirm --needed "$pkg"; then
-      warn "Failed to install $pkg from AUR (non-critical)"
+    # Check if package exists in AUR
+    info "  Checking $pkg availability in AUR..."
+    if ! check_aur_package "$pkg"; then
+      warn "  ✗ $pkg not found in AUR"
+      FAILED_PACKAGES+=("$pkg")
+      continue
+    fi
+    
+    info "  Installing $pkg from AUR..."
+    if yay -S --noconfirm --needed "$pkg" 2>&1 | tee -a "$INSTALL_LOG"; then
+      if is_package_installed "$pkg"; then
+        log "  ✓ $pkg installed successfully"
+        SUCCESSFUL_PACKAGES+=("$pkg")
+      else
+        warn "  ✗ $pkg installation reported success but package not found"
+        FAILED_PACKAGES+=("$pkg")
+      fi
+    else
+      warn "  ✗ Failed to install $pkg from AUR"
+      FAILED_PACKAGES+=("$pkg")
+    fi
+  done
+}
+
+install_optional_pkgs(){
+  local pkgs=("$@")
+  if [ ${#pkgs[@]} -eq 0 ]; then return 0; fi
+  
+  info "Installing ${#pkgs[@]} optional packages (non-critical)..."
+  
+  for pkg in "${pkgs[@]}"; do
+    if is_package_installed "$pkg"; then
+      info "  ✓ $pkg already installed"
+      continue
+    fi
+    
+    # Try pacman first
+    if check_pacman_package "$pkg"; then
+      info "  Trying $pkg from official repos..."
+      if sudo pacman -S --noconfirm --needed "$pkg" 2>/dev/null; then
+        log "  ✓ $pkg installed"
+        SUCCESSFUL_PACKAGES+=("$pkg")
+        continue
+      fi
+    fi
+    
+    # Try AUR if pacman failed
+    if command -v yay &>/dev/null; then
+      info "  Trying $pkg from AUR..."
+      if yay -S --noconfirm --needed "$pkg" 2>/dev/null; then
+        log "  ✓ $pkg installed from AUR"
+        SUCCESSFUL_PACKAGES+=("$pkg")
+      else
+        warn "  ✗ $pkg unavailable (optional, skipped)"
+      fi
+    else
+      warn "  ✗ $pkg skipped (yay not available)"
     fi
   done
 }
@@ -255,13 +382,18 @@ install_pipx_tools(){
   
   for tool in "${tools[@]}"; do
     if pipx list 2>/dev/null | grep -q "package $tool"; then
-      info "$tool already installed via pipx"
+      info "  ✓ $tool already installed via pipx"
+      SUCCESSFUL_PACKAGES+=("pipx:$tool")
       continue
     fi
     
-    log "Installing $tool via pipx..."
-    if ! pipx install "$tool" 2>/dev/null; then
-      warn "Failed to install $tool via pipx (non-critical)"
+    log "  Installing $tool via pipx..."
+    if pipx install "$tool" 2>&1 | tee -a "$INSTALL_LOG"; then
+      log "  ✓ $tool installed"
+      SUCCESSFUL_PACKAGES+=("pipx:$tool")
+    else
+      warn "  ✗ Failed to install $tool via pipx"
+      FAILED_PACKAGES+=("pipx:$tool")
     fi
   done
 }
@@ -273,9 +405,43 @@ install_pip_user_tools(){
   log "Installing ${#tools[@]} Python packages via pip --user..."
   
   for tool in "${tools[@]}"; do
-    info "Installing $tool..."
-    python -m pip install --user "$tool" 2>/dev/null || warn "Failed: $tool"
+    info "  Installing $tool..."
+    if python -m pip install --user "$tool" 2>&1 | tee -a "$INSTALL_LOG"; then
+      log "  ✓ $tool installed"
+      SUCCESSFUL_PACKAGES+=("pip:$tool")
+    else
+      warn "  ✗ Failed: $tool"
+      FAILED_PACKAGES+=("pip:$tool")
+    fi
   done
+}
+
+# Show installation summary
+show_install_summary(){
+  echo ""
+  echo -e "${CYAN}╔════════════════════════════════════════════════════╗${NC}"
+  echo -e "${CYAN}║           Installation Summary                     ║${NC}"
+  echo -e "${CYAN}╚════════════════════════════════════════════════════╝${NC}"
+  echo ""
+  
+  if [ ${#SUCCESSFUL_PACKAGES[@]} -gt 0 ]; then
+    log "Successfully installed: ${#SUCCESSFUL_PACKAGES[@]} packages"
+  fi
+  
+  if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
+    warn "Failed packages: ${#FAILED_PACKAGES[@]}"
+    echo ""
+    echo "The following packages failed to install:"
+    for pkg in "${FAILED_PACKAGES[@]}"; do
+      echo "  - $pkg"
+    done
+    echo ""
+    warn "Some functionality may be limited"
+  else
+    log "All packages installed successfully!"
+  fi
+  
+  info "Full log available at: $INSTALL_LOG"
 }
 
 # ------------------ Module Implementations ------------------
@@ -285,10 +451,10 @@ module_core(){
   ensure_sudo
   
   info "Updating package databases..."
-  sudo pacman -Sy --noconfirm
+  sudo pacman -Sy --noconfirm 2>&1 | tee -a "$INSTALL_LOG"
   
   info "Upgrading system..."
-  sudo pacman -Syu --noconfirm
+  sudo pacman -Syu --noconfirm 2>&1 | tee -a "$INSTALL_LOG"
   
   info "Installing core packages..."
   install_pacman_pkgs "${PACMAN_CORE[@]}"
@@ -323,8 +489,8 @@ module_vmtools(){
   install_pacman_pkgs "${PACMAN_VMTOOLS[@]}"
   
   info "Enabling vmtoolsd service..."
-  sudo systemctl enable vmtoolsd 2>/dev/null || true
-  sudo systemctl start vmtoolsd 2>/dev/null || true
+  sudo systemctl enable vmtoolsd 2>/dev/null || warn "Could not enable vmtoolsd"
+  sudo systemctl start vmtoolsd 2>/dev/null || warn "Could not start vmtoolsd"
   
   log "[vmtools] Done."
 }
@@ -343,11 +509,14 @@ module_networking(){
 module_ui(){
   log "[ui] Installing UI with HTB Neon Nord theme..."
   
-  # Install base UI packages
+  # Install base UI packages from official repos
   install_pacman_pkgs "${PACMAN_UI[@]}"
   
-  # Install polybar from AUR
+  # Install UI packages from AUR
   install_aur_pkgs "${AUR_UI[@]}"
+  
+  # Install optional UI packages
+  install_optional_pkgs "${OPTIONAL_UI[@]}"
   
   # Download HTB-style wallpaper
   info "Downloading Nord wallpaper..."
@@ -356,7 +525,7 @@ module_ui(){
        -o ~/Pictures/wallpaper.jpg 2>/dev/null; then
     log "Wallpaper downloaded"
   else
-    warn "Wallpaper download failed (non-critical)"
+    warn "Wallpaper download failed (will use feh default)"
   fi
   
   # Create .xinitrc
@@ -398,10 +567,9 @@ default_border pixel 2
 default_floating_border pixel 2
 for_window [class=".*"] title_format " "
 
-# Autostart (picom intentionally manual for VM performance)
-# exec_always --no-startup-id picom --config ~/.config/picom/picom.conf
+# Autostart
 exec_always --no-startup-id ~/.config/polybar/launch.sh
-exec_always --no-startup-id feh --bg-scale ~/Pictures/wallpaper.jpg
+exec_always --no-startup-id feh --bg-scale ~/Pictures/wallpaper.jpg || feh --bg-fill /usr/share/backgrounds/*
 exec --no-startup-id dunst
 
 # Keybindings
@@ -481,34 +649,27 @@ assign [class="Burp"] $ws3
 assign [class="Wireshark"] $ws2
 EOF
   
-  # Picom (VM-friendly, no blur, NOT auto-started)
+  # Picom config
   mkdir -p ~/.config/picom
   cat > ~/.config/picom/picom.conf << 'EOF'
-# VM-friendly picom config (xrender backend, no blur)
+# VM-friendly picom config
 backend = "xrender";
 vsync = true;
 use-damage = true;
 
-# Shadows
 shadow = true;
 shadow-radius = 12;
 shadow-opacity = 0.6;
 shadow-offset-x = -8;
 shadow-offset-y = -8;
 
-# Fading
 fading = true;
 fade-in-step = 0.03;
 fade-out-step = 0.03;
 
-# Opacity
 inactive-opacity = 0.92;
 frame-opacity = 0.9;
 
-# NO BLUR (VM performance)
-# blur-method = "none";
-
-# Rounded corners
 corner-radius = 8;
 rounded-corners-exclude = [
     "window_type = 'dock'",
@@ -605,7 +766,7 @@ polybar main 2>&1 | tee -a /tmp/polybar.log & disown
 EOF
   chmod +x ~/.config/polybar/launch.sh
   
-  # Kitty config (HTB themed)
+  # Kitty config
   mkdir -p ~/.config/kitty
   cat > ~/.config/kitty/kitty.conf << 'EOF'
 # HTB Neon Nord Kitty Theme
@@ -617,13 +778,11 @@ cursor_blink_interval 0
 background_opacity 0.92
 background_blur 20
 
-# Nord + HTB Green
 foreground            #eceff4
 background            #2e3440
 selection_foreground  #2e3440
 selection_background  #9fef00
 
-# Colors
 color0   #3b4252
 color8   #4c566a
 color1   #bf616a
@@ -719,7 +878,7 @@ element-icon {
 }
 EOF
   
-  # Dunst notification config
+  # Dunst config
   mkdir -p ~/.config/dunst
   cat > ~/.config/dunst/dunstrc << 'EOF'
 [global]
@@ -774,8 +933,6 @@ EOF
   
   log "[ui] Done. Theme: HTB Neon Nord (#9fef00)"
   info "Start X with: startx"
-  info "Picom is installed but NOT auto-started (VM performance)"
-  info "To enable picom: add to i3 config or run manually"
 }
 
 module_pentest(){
@@ -788,7 +945,7 @@ module_pentest(){
   install_aur_pkgs "${AUR_PENTEST[@]}"
   
   # Optional AUR packages
-  info "Installing optional AUR tools (may fail)..."
+  info "Installing optional AUR tools..."
   install_aur_pkgs "${AUR_OPTIONAL[@]}"
   
   # Install pipx tools
@@ -800,7 +957,7 @@ module_pentest(){
   # Setup Metasploit database
   info "Initializing Metasploit database..."
   if command -v msfdb &>/dev/null; then
-    msfdb init 2>/dev/null || warn "msfdb init failed (non-critical)"
+    msfdb init 2>&1 | tee -a "$INSTALL_LOG" || warn "msfdb init failed (non-critical)"
   fi
   
   log "[pentest] Done."
@@ -849,7 +1006,7 @@ return {
 }
 EOF
   
-  # Custom keymaps for pentesting
+  # Custom keymaps
   cat > ~/.config/nvim/lua/config/keymaps.lua << 'EOF'
 local map = vim.keymap.set
 
@@ -1079,10 +1236,6 @@ Quick-start templates for common exploitation scenarios.
 2. Edit TARGET/PARAM placeholders
 3. Run and iterate
 4. Document in notes/
-
-## LazyVim Access
-- `<leader>fe` - Find exploits
-- `<leader>fn` - Find notes
 EOFMD
   
   log "[exploits] Done. Templates in ~/exploits/"
@@ -1202,10 +1355,10 @@ EOFSCRIPT
 module_theming(){
   log "[theming] Final theme polish..."
   
-  # GTK theme (if available)
+  # GTK theme (optional)
   if command -v yay &>/dev/null; then
     info "Installing Nordic GTK theme..."
-    yay -S --noconfirm nordic-theme 2>/dev/null || warn "Nordic theme not available"
+    yay -S --noconfirm nordic-theme 2>&1 | tee -a "$INSTALL_LOG" || warn "Nordic theme not available"
   fi
   
   # Set GTK settings
@@ -1336,6 +1489,10 @@ done
 # Show banner
 show_banner
 
+# Initialize install log
+echo "Skidstall Installation Log - $(date)" > "$INSTALL_LOG"
+info "Logging to: $INSTALL_LOG"
+
 # Validate modules
 if [ ${#MODULES[@]} -gt 0 ]; then
   for m in "${MODULES[@]}"; do
@@ -1353,17 +1510,15 @@ if ! $AUTO && [ ${#MODULES[@]} -eq 0 ] && ! $UPDATE; then
   info "Select modules to install:"
   echo ""
   
+  MODULES=(core)  # Always include core
+  
   for m in "${MODULE_EXECUTION_ORDER[@]}"; do
-    case $m in
-      core)
-        info "  core - Required (system update, base tools)"
-        ;;
-      *)
-        if confirm "  Install $m?" y; then
-          MODULES+=("$m")
-        fi
-        ;;
-    esac
+    if [ "$m" = "core" ]; then
+      continue
+    fi
+    if confirm "  Install $m?"; then
+      MODULES+=("$m")
+    fi
   done
   echo ""
 fi
@@ -1383,16 +1538,16 @@ fi
 if $UPDATE; then
   ensure_sudo
   log "Update mode: upgrading system packages..."
-  sudo pacman -Syu --noconfirm
+  sudo pacman -Syu --noconfirm 2>&1 | tee -a "$INSTALL_LOG"
   
   if command -v yay &>/dev/null; then
     log "Upgrading AUR packages..."
-    yay -Syu --noconfirm || warn "Some AUR upgrades failed"
+    yay -Syu --noconfirm 2>&1 | tee -a "$INSTALL_LOG" || warn "Some AUR upgrades failed"
   fi
   
   if command -v pipx &>/dev/null; then
     log "Upgrading pipx packages..."
-    pipx upgrade-all || warn "Some pipx upgrades failed"
+    pipx upgrade-all 2>&1 | tee -a "$INSTALL_LOG" || warn "Some pipx upgrades failed"
   fi
   
   log "Update complete. Re-running selected modules..."
@@ -1436,6 +1591,9 @@ for m in "${SORTED_MODULES[@]}"; do
   esac
 done
 
+# Show installation summary
+show_install_summary
+
 # Final summary
 echo ""
 echo -e "${GREEN}╔═══════════════════════════════════════════════════════════╗${NC}"
@@ -1464,10 +1622,9 @@ echo "  vpn-up <config>         - Start VPN"
 echo "  docker-on/docker-off    - Start/stop Docker"
 echo ""
 warn "Notes:"
-echo "  • Picom installed but NOT auto-started (VM performance)"
-echo "  • Docker installed but NOT enabled (use docker-on)"
+echo "  • Picom NOT auto-started (VM performance)"
+echo "  • Docker NOT enabled (use docker-on)"
 echo "  • SSH server NOT enabled (use: sudo systemctl enable sshd)"
-echo "  • Exploit templates in ~/exploits/"
 echo "  • Theme: HTB Neon Nord (#9fef00 green)"
 echo ""
 log "Happy hacking! 🚀"
