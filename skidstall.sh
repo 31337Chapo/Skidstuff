@@ -65,7 +65,7 @@ PACMAN_UI=(
   maim xclip dunst btop firefox
   picom
   gtk3 gtk4
-  ttf-fira-code ttf-jetbrains-mono-nerd ttf-font-awesome
+  ttf-fira-code ttf-jetbrains-mono-nerd ttf-font-awesome-6
   papirus-icon-theme
 )
 
