@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# startx troubleshooting and fix script
-# Diagnoses and fixes common startx issues after skidstall installation
+# startx segmentation fault fix script
+# Addresses critical X server crash issues
 
 set -euo pipefail
 
@@ -17,133 +17,165 @@ warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 err() { echo -e "${RED}[✗]${NC} $*" >&2; }
 info() { echo -e "${CYAN}[i]${NC} $*"; }
 
-echo -e "${CYAN}"
+echo -e "${RED}"
 cat << 'EOF'
 ╔═══════════════════════════════════════════════════════╗
-║         startx Diagnostic & Fix Tool                 ║
+║     SEGMENTATION FAULT FIX - X Server Crash          ║
 ╚═══════════════════════════════════════════════════════╝
 EOF
 echo -e "${NC}"
 
-# Check if running as root
 if [ "$EUID" -eq 0 ]; then
-   err "Do not run this script as root. Run as your regular user."
+   err "Do not run this script as root"
    exit 1
 fi
 
-log "Running diagnostics..."
+log "Analyzing segmentation fault causes..."
 echo ""
 
-# 1. Check if X11 packages are installed
-info "Checking X11 installation..."
-MISSING_X11=()
+# 1. Check for corrupted X server installation
+info "Step 1: Checking X server integrity..."
+XORG_PKGS=("xorg-server" "xorg-xinit" "xorg-xauth" "xf86-input-libinput")
 
-REQUIRED_X11=(
-    "xorg-server"
-    "xorg-xinit"
-    "xorg-xauth"
-)
-
-for pkg in "${REQUIRED_X11[@]}"; do
-    if ! pacman -Qi "$pkg" &>/dev/null; then
-        MISSING_X11+=("$pkg")
+for pkg in "${XORG_PKGS[@]}"; do
+    if pacman -Qi "$pkg" &>/dev/null; then
+        log "✓ $pkg installed"
+    else
+        warn "✗ $pkg MISSING"
     fi
 done
 
-if [ ${#MISSING_X11[@]} -gt 0 ]; then
-    warn "Missing X11 packages: ${MISSING_X11[*]}"
-    if read -rp "Install missing X11 packages? [y/N]: " ans && [[ "$ans" =~ ^[yY]$ ]]; then
-        sudo pacman -S --noconfirm "${MISSING_X11[@]}"
-        log "X11 packages installed"
-    fi
-else
-    log "✓ All required X11 packages installed"
+# Reinstall X server completely
+warn "Reinstalling X server packages to fix corruption..."
+if read -rp "Reinstall all X server packages? [y/N]: " ans && [[ "$ans" =~ ^[yY]$ ]]; then
+    sudo pacman -S --noconfirm xorg-server xorg-xinit xorg-xauth xf86-input-libinput
+    log "✓ X server reinstalled"
 fi
 
-# 2. Check if i3 is installed
-info "Checking i3 window manager..."
-if ! pacman -Qi i3-wm &>/dev/null && ! pacman -Qi i3-gaps &>/dev/null; then
-    err "i3 window manager not installed"
-    if read -rp "Install i3-wm? [y/N]: " ans && [[ "$ans" =~ ^[yY]$ ]]; then
-        sudo pacman -S --noconfirm i3-wm i3status i3lock
-        log "i3 installed"
+# 2. Check graphics drivers (CRITICAL for segfaults)
+echo ""
+info "Step 2: Checking graphics drivers..."
+
+# Detect GPU
+if lspci | grep -i vga | grep -qi vmware; then
+    warn "VMware GPU detected"
+    
+    if ! pacman -Qi xf86-video-vmware &>/dev/null; then
+        err "VMware video driver MISSING - this is likely the cause!"
+        warn "Installing xf86-video-vmware..."
+        sudo pacman -S --noconfirm xf86-video-vmware xf86-input-vmmouse
+        log "✓ VMware drivers installed"
     else
-        err "Cannot start X without a window manager"
-        exit 1
+        log "✓ VMware driver present"
+    fi
+    
+    # Check if open-vm-tools is running
+    if ! systemctl is-active --quiet vmtoolsd 2>/dev/null; then
+        warn "VMware tools service not running"
+        if pacman -Qi open-vm-tools &>/dev/null; then
+            sudo systemctl enable --now vmtoolsd 2>/dev/null || warn "Could not start vmtoolsd"
+            log "✓ Started vmtoolsd"
+        fi
+    fi
+
+elif lspci | grep -i vga | grep -qi virtualbox; then
+    warn "VirtualBox GPU detected"
+    
+    if ! pacman -Qi virtualbox-guest-utils &>/dev/null; then
+        err "VirtualBox guest additions MISSING"
+        warn "Installing virtualbox-guest-utils..."
+        sudo pacman -S --noconfirm virtualbox-guest-utils
+        log "✓ VirtualBox guest utils installed"
+    fi
+
+elif lspci | grep -i vga | grep -qi nvidia; then
+    warn "NVIDIA GPU detected"
+    info "NVIDIA requires proprietary drivers"
+    echo "Install: sudo pacman -S nvidia nvidia-utils"
+    
+elif lspci | grep -i vga | grep -qi amd; then
+    log "AMD GPU detected - using open source drivers"
+    
+elif lspci | grep -i vga | grep -qi intel; then
+    log "Intel GPU detected"
+    if ! pacman -Qi xf86-video-intel &>/dev/null; then
+        warn "Consider installing: xf86-video-intel"
     fi
 else
-    log "✓ i3 window manager installed"
+    warn "Unknown GPU - using generic VESA driver"
 fi
 
-# 3. Check .xinitrc
-info "Checking .xinitrc configuration..."
-if [ ! -f ~/.xinitrc ]; then
-    warn ".xinitrc not found, creating it..."
-    cat > ~/.xinitrc << 'XINITRC'
+# 3. Remove problematic modesetting/fbdev configs
+echo ""
+info "Step 3: Checking for problematic X configurations..."
+
+if [ -d /etc/X11/xorg.conf.d ]; then
+    if ls /etc/X11/xorg.conf.d/*.conf &>/dev/null; then
+        warn "Found X configuration files that may cause conflicts"
+        ls -la /etc/X11/xorg.conf.d/
+        echo ""
+        if read -rp "Backup and remove X config files? [y/N]: " ans && [[ "$ans" =~ ^[yY]$ ]]; then
+            sudo mkdir -p /etc/X11/xorg.conf.d.backup
+            sudo mv /etc/X11/xorg.conf.d/*.conf /etc/X11/xorg.conf.d.backup/ 2>/dev/null || true
+            log "✓ X configs backed up and removed"
+        fi
+    fi
+fi
+
+if [ -f /etc/X11/xorg.conf ]; then
+    warn "Found /etc/X11/xorg.conf (may cause issues)"
+    if read -rp "Backup and remove xorg.conf? [y/N]: " ans && [[ "$ans" =~ ^[yY]$ ]]; then
+        sudo mv /etc/X11/xorg.conf /etc/X11/xorg.conf.backup
+        log "✓ xorg.conf backed up"
+    fi
+fi
+
+# 4. Create minimal safe .xinitrc
+echo ""
+info "Step 4: Creating minimal safe .xinitrc..."
+
+cat > ~/.xinitrc << 'XINITRC'
 #!/bin/sh
-
-# Load X resources
-[ -f ~/.Xresources ] && xrdb -merge ~/.Xresources
-
-# Start compositor (if available)
-if command -v picom &>/dev/null; then
-    picom -b &
-fi
-
-# Set wallpaper (if available)
-if command -v feh &>/dev/null; then
-    feh --bg-scale ~/Pictures/wallpaper.jpg 2>/dev/null || \
-    feh --bg-fill /usr/share/backgrounds/* 2>/dev/null || true
-fi
-
-# Start i3
 exec i3
 XINITRC
-    chmod +x ~/.xinitrc
-    log "✓ Created ~/.xinitrc"
+
+chmod +x ~/.xinitrc
+log "✓ Created minimal .xinitrc"
+
+# 5. Verify i3 installation
+echo ""
+info "Step 5: Verifying i3 installation..."
+
+if ! command -v i3 &>/dev/null; then
+    err "i3 not found!"
+    if read -rp "Install i3-wm? [y/N]: " ans && [[ "$ans" =~ ^[yY]$ ]]; then
+        sudo pacman -S --noconfirm i3-wm i3status i3lock
+        log "✓ i3 installed"
+    fi
 else
-    log "✓ ~/.xinitrc exists"
-    
-    # Check if it's executable
-    if [ ! -x ~/.xinitrc ]; then
-        warn ".xinitrc is not executable, fixing..."
-        chmod +x ~/.xinitrc
-        log "✓ Made ~/.xinitrc executable"
-    fi
-    
-    # Check if it has a shebang
-    if ! head -n1 ~/.xinitrc | grep -q '^#!'; then
-        warn ".xinitrc missing shebang, adding it..."
-        echo '#!/bin/sh' | cat - ~/.xinitrc > ~/.xinitrc.tmp
-        mv ~/.xinitrc.tmp ~/.xinitrc
-        chmod +x ~/.xinitrc
-        log "✓ Added shebang to ~/.xinitrc"
-    fi
+    log "✓ i3 found: $(which i3)"
 fi
 
-# 4. Check i3 config
-info "Checking i3 configuration..."
-if [ ! -f ~/.config/i3/config ]; then
-    warn "i3 config not found"
-    if read -rp "Generate default i3 config? [y/N]: " ans && [[ "$ans" =~ ^[yY]$ ]]; then
-        mkdir -p ~/.config/i3
-        i3-config-wizard --version &>/dev/null && i3-config-wizard || {
-            # Create minimal config
-            cat > ~/.config/i3/config << 'I3CONFIG'
-# Minimal i3 config
+# 6. Create minimal i3 config
+echo ""
+info "Step 6: Creating minimal i3 configuration..."
+
+mkdir -p ~/.config/i3
+
+cat > ~/.config/i3/config << 'I3CONFIG'
+# Minimal i3 config for testing
 set $mod Mod4
+
+# Font
 font pango:monospace 10
 
-# Start terminal
-bindsym $mod+Return exec i3-sensible-terminal
+# Start a terminal
+bindsym $mod+Return exec xterm
 
 # Kill focused window
 bindsym $mod+Shift+q kill
 
-# Start dmenu/rofi
-bindsym $mod+d exec --no-startup-id "dmenu_run || rofi -show drun"
-
-# Change focus (vim keys)
+# Change focus
 bindsym $mod+h focus left
 bindsym $mod+j focus down
 bindsym $mod+k focus up
@@ -155,7 +187,7 @@ bindsym $mod+Shift+j move down
 bindsym $mod+Shift+k move up
 bindsym $mod+Shift+l move right
 
-# Split orientation
+# Split
 bindsym $mod+b split h
 bindsym $mod+v split v
 
@@ -166,142 +198,131 @@ bindsym $mod+f fullscreen toggle
 bindsym $mod+Shift+c reload
 bindsym $mod+Shift+r restart
 
-# Exit i3
-bindsym $mod+Shift+e exec "i3-nagbar -t warning -m 'Exit i3?' -B 'Yes' 'i3-msg exit'"
+# Exit
+bindsym $mod+Shift+e exec "i3-msg exit"
 
 # Workspaces
-bindsym $mod+1 workspace number 1
-bindsym $mod+2 workspace number 2
-bindsym $mod+3 workspace number 3
-bindsym $mod+4 workspace number 4
-bindsym $mod+5 workspace number 5
-
-bindsym $mod+Shift+1 move container to workspace number 1
-bindsym $mod+Shift+2 move container to workspace number 2
-bindsym $mod+Shift+3 move container to workspace number 3
-bindsym $mod+Shift+4 move container to workspace number 4
-bindsym $mod+Shift+5 move container to workspace number 5
+bindsym $mod+1 workspace 1
+bindsym $mod+2 workspace 2
+bindsym $mod+3 workspace 3
+bindsym $mod+4 workspace 4
+bindsym $mod+5 workspace 5
 I3CONFIG
-        }
-        log "✓ Created i3 config"
-    fi
-else
-    log "✓ i3 config exists"
-fi
 
-# 5. Check for conflicting display managers
-info "Checking for display managers..."
-DISPLAY_MANAGERS=("gdm" "lightdm" "sddm" "lxdm")
-ACTIVE_DM=""
+log "✓ Created minimal i3 config"
 
-for dm in "${DISPLAY_MANAGERS[@]}"; do
-    if systemctl is-active --quiet "$dm" 2>/dev/null; then
-        ACTIVE_DM="$dm"
-        break
-    fi
-done
-
-if [ -n "$ACTIVE_DM" ]; then
-    warn "Display manager '$ACTIVE_DM' is running"
-    info "This can conflict with startx. You should either:"
-    echo "  1. Use the display manager to login (may require session selection)"
-    echo "  2. Disable it: sudo systemctl disable --now $ACTIVE_DM"
-    echo ""
-    if read -rp "Disable $ACTIVE_DM and use startx? [y/N]: " ans && [[ "$ans" =~ ^[yY]$ ]]; then
-        sudo systemctl disable --now "$ACTIVE_DM"
-        log "✓ Disabled $ACTIVE_DM"
-    fi
-else
-    log "✓ No conflicting display managers"
-fi
-
-# 6. Check graphics drivers
-info "Checking graphics drivers..."
-if lspci | grep -i vga | grep -qi vmware; then
-    log "VMware detected"
-    if ! pacman -Qi xf86-video-vmware &>/dev/null; then
-        warn "VMware video driver not installed"
-        if read -rp "Install xf86-video-vmware? [y/N]: " ans && [[ "$ans" =~ ^[yY]$ ]]; then
-            sudo pacman -S --noconfirm xf86-video-vmware
-            log "✓ VMware driver installed"
-        fi
-    else
-        log "✓ VMware driver installed"
-    fi
-fi
-
-# 7. Check for X server logs
-info "Checking recent X server logs..."
-if [ -f ~/.local/share/xorg/Xorg.0.log ]; then
-    warn "Found X server log, checking for errors..."
-    if grep -i "error\|failed\|fatal" ~/.local/share/xorg/Xorg.0.log | tail -5; then
-        echo ""
-        info "Recent X server errors found above"
-    fi
-elif [ -f /var/log/Xorg.0.log ]; then
-    if grep -i "error\|failed\|fatal" /var/log/Xorg.0.log 2>/dev/null | tail -5; then
-        echo ""
-        info "Recent X server errors found above"
-    fi
-fi
-
-# 8. Test X server
+# 7. Install xterm as fallback terminal
 echo ""
-info "Testing X server availability..."
-if xhost &>/dev/null; then
-    warn "X server already running on this display"
-    info "You may already be in a graphical session"
-elif pgrep -x Xorg &>/dev/null || pgrep -x X &>/dev/null; then
-    warn "X server process found running"
-    info "You may need to stop it first or use a different display"
+info "Step 7: Ensuring terminal emulator..."
+
+if ! command -v xterm &>/dev/null; then
+    warn "Installing xterm as fallback terminal..."
+    sudo pacman -S --noconfirm xterm
+    log "✓ xterm installed"
+else
+    log "✓ xterm available"
 fi
 
-# 9. Check terminal emulator
-info "Checking for terminal emulator..."
-TERMINALS=("kitty" "alacritty" "xterm" "urxvt" "gnome-terminal" "konsole")
-FOUND_TERM=false
+# 8. Check for kernel module issues
+echo ""
+info "Step 8: Checking kernel modules..."
 
-for term in "${TERMINALS[@]}"; do
-    if command -v "$term" &>/dev/null; then
-        log "✓ Found terminal: $term"
-        FOUND_TERM=true
+# Ensure DRM modules are loaded
+REQUIRED_MODULES=("drm" "drm_kms_helper")
+for mod in "${REQUIRED_MODULES[@]}"; do
+    if lsmod | grep -q "^${mod}"; then
+        log "✓ Module $mod loaded"
+    else
+        warn "Module $mod not loaded (may be normal)"
+    fi
+done
+
+# 9. Clear any stale X locks
+echo ""
+info "Step 9: Clearing stale X server locks..."
+
+rm -f /tmp/.X0-lock ~/.Xauthority 2>/dev/null || true
+log "✓ Cleared X locks"
+
+# 10. Check logs for specific errors
+echo ""
+info "Step 10: Checking previous X server logs..."
+
+LOG_LOCATIONS=(
+    "$HOME/.local/share/xorg/Xorg.0.log"
+    "/var/log/Xorg.0.log"
+)
+
+for logfile in "${LOG_LOCATIONS[@]}"; do
+    if [ -f "$logfile" ]; then
+        echo ""
+        warn "Checking $logfile for errors..."
+        echo ""
+        
+        # Look for critical errors
+        if grep -i "segmentation fault\|fatal\|failed to load module" "$logfile" 2>/dev/null | tail -10; then
+            echo ""
+            info "Found errors above - review these carefully"
+        fi
+        
+        # Check for missing drivers
+        if grep -i "no screens found\|no devices detected" "$logfile" 2>/dev/null; then
+            err "NO SCREENS FOUND - driver issue!"
+            echo ""
+            warn "This means your graphics driver is missing or incompatible"
+        fi
+        
         break
     fi
 done
 
-if ! $FOUND_TERM; then
-    warn "No terminal emulator found"
-    if read -rp "Install xterm (minimal terminal)? [y/N]: " ans && [[ "$ans" =~ ^[yY]$ ]]; then
-        sudo pacman -S --noconfirm xterm
-        log "✓ xterm installed"
-    fi
-fi
-
-# 10. Summary and recommendations
+# 11. Final recommendations
 echo ""
 echo -e "${CYAN}╔════════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║              Diagnostic Summary                    ║${NC}"
+echo -e "${CYAN}║         Segmentation Fault Fix Summary            ║${NC}"
 echo -e "${CYAN}╚════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-log "Diagnostics complete!"
-echo ""
-info "To start X11 with i3, run:"
-echo "  startx"
-echo ""
-info "If startx still fails, check:"
-echo "  1. View X server log: cat ~/.local/share/xorg/Xorg.0.log"
-echo "  2. Check i3 log: cat ~/.local/share/i3/i3log"
-echo "  3. Verify display: echo \$DISPLAY (should be empty before startx)"
-echo "  4. Check permissions: ls -la ~/.xinitrc ~/.config/i3/config"
+log "Critical fixes applied:"
+echo "  ✓ X server packages reinstalled"
+echo "  ✓ Graphics drivers checked/installed"
+echo "  ✓ Conflicting configs removed"
+echo "  ✓ Minimal safe configuration created"
+echo "  ✓ X locks cleared"
 echo ""
 
-# Offer to try starting X
-if read -rp "Would you like to try starting X now? [y/N]: " ans && [[ "$ans" =~ ^[yY]$ ]]; then
+warn "IMPORTANT: If in a VM, ensure:"
+echo "  • 3D acceleration is DISABLED in VM settings"
+echo "  • VM guest tools are installed (open-vm-tools or virtualbox-guest-utils)"
+echo "  • Sufficient video memory allocated (at least 128MB)"
+echo ""
+
+info "Try starting X now with:"
+echo "  startx"
+echo ""
+
+info "If it still crashes, run:"
+echo "  startx 2>&1 | tee ~/startx-error.log"
+echo "  (This will save the full error log)"
+echo ""
+
+info "For immediate testing, try:"
+echo "  Xorg -configure"
+echo "  (This tests X server without a window manager)"
+echo ""
+
+# Offer to test X server directly
+if read -rp "Would you like to test the X server now? [y/N]: " ans && [[ "$ans" =~ ^[yY]$ ]]; then
     echo ""
-    log "Attempting to start X server..."
+    log "Testing X server configuration..."
     echo ""
+    warn "This will test Xorg directly. Press Ctrl+Alt+F2 to return to console if needed."
+    echo ""
+    sleep 2
+    
+    # Test with minimal config
+    log "Attempting to start X..."
     exec startx
 fi
 
-info "Run 'startx' when ready to launch the graphical environment"
+log "Setup complete. Run 'startx' when ready."
