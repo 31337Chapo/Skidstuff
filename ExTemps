@@ -1,0 +1,404 @@
+# 🎯 Exploit Templates Guide
+
+## What Are Exploit Templates?
+
+Pre-written, customizable exploit scripts for common vulnerability classes. Think of them as "exploitation cookbooks" - ready-to-use code that you just need to tweak with your target's specifics.
+
+## 📁 Template Categories
+
+### 🌐 Web Exploitation (`~/exploits/web/`)
+
+#### **1. SQL Injection - Union Based** (`sqli_union.py`)
+```python
+# Auto-detects number of columns
+# Extracts database version and tables
+# Usage: Edit TARGET and PARAM, then run
+./sqli_union.py
+```
+
+**When to use:**
+- Error-based SQLi found
+- Need to dump database contents
+- UNION statements work
+
+**Customization:**
+```python
+TARGET = "http://10.10.10.123/products.php"
+PARAM = "id"  # The vulnerable parameter
+```
+
+#### **2. Local File Inclusion** (`lfi_wrapper.py`)
+```python
+# Tests PHP wrapper techniques
+# Includes base64 encoding for source extraction
+```
+
+**When to use:**
+- LFI vulnerability found
+- Want to read PHP source code
+- Need to escalate to RCE
+
+**Common targets:**
+- `/etc/passwd` - User enumeration
+- `config.php` - Database credentials
+- `index.php` - Application source
+
+#### **3. XXE Injection** (`xxe_exfil.xml`)
+```xml
+<!-- File exfiltration via XXE -->
+<!-- Out-of-band data exfiltration -->
+```
+
+**When to use:**
+- XML input accepted
+- External entities not disabled
+- Need to read server files
+
+### 💻 Binary Exploitation (`~/exploits/binary/`)
+
+#### **4. Ret2libc** (`ret2libc.py`)
+```python
+# Bypasses NX protection
+# Leaks libc addresses
+# Returns to system() for shell
+```
+
+**When to use:**
+- Stack overflow + NX enabled
+- ASLR enabled
+- Libc available
+
+**Steps:**
+1. Find buffer overflow offset
+2. Leak libc address (puts/printf)
+3. Calculate libc base
+4. Call system('/bin/sh')
+
+#### **5. Shellcode Injection** (`shellcode_inject.py`)
+```python
+# Direct shellcode execution
+# For when NX is disabled
+```
+
+**When to use:**
+- Stack overflow + NX disabled
+- Know buffer address
+- Can control EIP/RIP
+
+### 🪟 Windows Exploitation (`~/exploits/windows/`)
+
+#### **6. SMB Relay Attack** (`smb_relay.sh`)
+```bash
+# Captures and relays NTLM hashes
+# Can execute commands on target
+```
+
+**When to use:**
+- SMB signing not required
+- On local network
+- Have network position
+
+**Attack flow:**
+1. Responder captures hash
+2. Ntlmrelayx relays to target
+3. Execute commands or dump SAM
+
+#### **7. Lateral Movement** (`lateral_movement.sh`)
+```bash
+# PSExec, WMI, WinRM techniques
+# Pass-the-Hash attacks
+```
+
+**When to use:**
+- Have credentials/hashes
+- Need to move to other machines
+- Admin on one box, want access to others
+
+**Techniques included:**
+- **PSExec** - Service-based execution (loud)
+- **WMIExec** - WMI-based (stealthier)
+- **Evil-WinRM** - WinRM protocol
+- **Pass-the-Hash** - Use NTLM hash directly
+
+### 🐧 Linux PrivEsc (`~/exploits/linux/`)
+
+#### **8. Privilege Escalation Checks** (`privesc_checks.sh`)
+```bash
+# Automated enumeration
+# SUID, capabilities, cron, etc.
+```
+
+**What it checks:**
+- SUID/SGID binaries
+- Sudo permissions
+- Writable files
+- Capabilities
+- Cron jobs
+- Kernel version
+
+#### **9. Docker Escape** (`docker_escape.sh`)
+```bash
+# Container breakout techniques
+# Multiple methods included
+```
+
+**Methods:**
+1. **Docker socket mounted** - Spawn privileged container
+2. **Privileged container** - Mount host filesystem
+3. **CAP_SYS_ADMIN** - Cgroup exploitation
+4. **Vulnerable runc** - CVE-2019-5736
+
+### 🛠️ Utility Scripts (`~/exploits/scripts/`)
+
+#### **10. Reverse Shell Generator** (`reverse_shell_generator.sh`)
+```bash
+# Generates shells for all languages
+./reverse_shell_generator.sh 10.10.14.5 4444
+```
+
+**Outputs:**
+- Bash
+- Python
+- PHP
+- PowerShell
+- Netcat
+- URL-encoded versions
+
+#### **11. Payload Encoder** (`payload_encoder.py`)
+```python
+# WAF bypass techniques
+./payload_encoder.py "' OR 1=1-- -"
+```
+
+**Encodings:**
+- Base64
+- URL encoding
+- Double URL encoding
+- Hex
+- Unicode
+
+## 🚀 Typical Workflow
+
+### Scenario: Web App with SQLi
+
+1. **Find vulnerability**
+   ```bash
+   # In your notes
+   sqlmap -u "http://target.com/page.php?id=1" --batch
+   ```
+
+2. **Copy template**
+   ```bash
+   cp ~/exploits/web/sqli_union.py ~/pentest/target/exploit.py
+   ```
+
+3. **Customize in LazyVim**
+   ```bash
+   nvim exploit.py
+   # <leader>fe to find exploit templates
+   ```
+
+4. **Edit target info**
+   ```python
+   TARGET = "http://10.10.10.123/products.php"
+   PARAM = "id"
+   ```
+
+5. **Run and iterate**
+   ```bash
+   python3 exploit.py
+   # Modify based on results
+   ```
+
+6. **Document in notes**
+   ```bash
+   nvim notes/target-notes.md
+   # <leader>pn for new note
+   ```
+
+## 🎨 LazyVim Integration
+
+### Quick Access Keybinds
+
+| Keybind | Action | Description |
+|---------|--------|-------------|
+| `<leader>fe` | Find Exploits | Telescope search in ~/exploits/ |
+| `<leader>fn` | Find Notes | Search pentest notes |
+| `<leader>pn` | New Note | Create pentest note |
+| `<leader>ps` | Pentest Dir | Open ~/pentest/ |
+| `<leader>pt` | Terminal | Split terminal |
+| `<leader>ip` | Insert IP | Quick 10.10.10. template |
+| `<leader>rev` | Reverse Shell | Insert bash reverse shell |
+
+### Example Usage
+
+```vim
+" Open exploit template
+<leader>fe → Type "sqli" → Enter
+
+" Copy template to current project
+:!cp % ~/pentest/target/exploit.py
+
+" Edit in split
+:vs ~/pentest/target/exploit.py
+
+" Run it
+:terminal python3 %
+```
+
+## 🔥 Pro Tips
+
+### 1. Template Customization Workflow
+```bash
+# Copy template
+cp ~/exploits/web/sqli_union.py ./
+
+# Edit placeholders (vim search/replace)
+:%s/TARGET_URL/http:\/\/10.10.10.123/g
+:%s/PARAM/id/g
+
+# Save as target-specific name
+:w target_sqli.py
+```
+
+### 2. Version Control Your Exploits
+```bash
+cd ~/pentest/target
+git init
+git add exploit.py
+git commit -m "Initial SQLi exploit"
+# Commit as you iterate
+```
+
+### 3. Template Combination
+```python
+# Start with LFI template
+# Escalate to RCE with PHP wrapper
+# Add reverse shell from generator
+# = Custom exploit chain!
+```
+
+### 4. Quick Template Creation
+```bash
+# Create new template from working exploit
+cp current_exploit.py ~/exploits/web/new_template.py
+# Replace specific values with [PLACEHOLDER]
+# Now it's reusable!
+```
+
+## 📚 Real-World Examples
+
+### Example 1: HTB Box with SQLi
+
+```bash
+# 1. Find SQLi with sqlmap
+sqlmap -u "http://10.10.10.123/products.php?id=1"
+
+# 2. Copy template
+cd ~/pentest/htb-shocker
+cp ~/exploits/web/sqli_union.py ./
+
+# 3. Customize (LazyVim)
+nvim sqli_union.py
+# Update TARGET and PARAM
+
+# 4. Run
+python3 sqli_union.py
+
+# 5. Got admin hash! Add to notes
+nvim notes/shocker-notes.md
+```
+
+### Example 2: Binary Exploitation CTF
+
+```bash
+# 1. Analyze binary
+checksec vuln
+gdb vuln
+
+# 2. Find offset
+pattern_create 200
+# Offset = 64
+
+# 3. Copy ret2libc template
+cp ~/exploits/binary/ret2libc.py ./
+
+# 4. Update offset and addresses
+nvim ret2libc.py
+
+# 5. Test locally, then against remote
+python3 ret2libc.py
+```
+
+### Example 3: Windows AD Pentest
+
+```bash
+# 1. Got credentials from web app
+# user:password123
+
+# 2. Test on network
+cp ~/exploits/windows/lateral_movement.sh ./
+
+# 3. Edit credentials
+nvim lateral_movement.sh
+USER="administrator"
+PASS="password123"
+TARGET="192.168.1.100"
+
+# 4. Try each technique
+./lateral_movement.sh
+# PSExec works!
+
+# 5. Document path
+nvim notes/domain-notes.md
+```
+
+## 🎓 Learning Path
+
+1. **Start Simple**
+   - Use web templates (SQLi, LFI)
+   - Understand what each line does
+   - Modify gradually
+
+2. **Intermediate**
+   - Binary exploitation templates
+   - Understand memory layout
+   - Learn pwntools
+
+3. **Advanced**
+   - Create your own templates
+   - Chain exploits together
+   - Automate full kill chains
+
+## 🔧 Template Maintenance
+
+```bash
+# Keep templates updated
+cd ~/exploits
+git init
+git add .
+git commit -m "Initial templates"
+
+# Update from new techniques learned
+# After each pentest, extract reusable code
+```
+
+## 🌟 Why Templates Matter
+
+1. **Speed** - Don't rewrite the same exploit code
+2. **Reliability** - Tested, working code
+3. **Learning** - Study how exploits work
+4. **Consistency** - Same structure every time
+5. **Collaboration** - Share with team
+
+## 📖 Further Resources
+
+- **PayloadsAllTheThings** - Massive payload collection
+- **HackTricks** - Pentesting methodology
+- **GTFOBins** - Unix binaries for privesc
+- **LOLBAS** - Windows binaries for living off the land
+- **RevShells** - Online reverse shell generator
+
+---
+
+**Remember:** Templates are starting points, not final solutions. Always customize for your specific target! 🎯
