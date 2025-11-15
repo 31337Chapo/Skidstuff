@@ -4,6 +4,7 @@
 # - Modules installed in correct dependency order automatically
 # - HTB-inspired Neon Nord theme (green #9fef00 + Nord palette)
 # - Package validation and integrity checks
+# - UPDATED: Modern VMware graphics driver support (no xf86-video-vmware)
 #
 # Usage examples:
 #   ./skidstall.sh               # interactive CLI
@@ -60,7 +61,8 @@ PACMAN_DEV=(
 
 # UI packages - needs fonts and base X
 PACMAN_UI=(
-  xorg-server xorg-xinit xorg-xrandr xorg-xsetroot
+  mesa xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xauth
+  xf86-input-libinput
   i3-wm i3status i3lock
   feh rofi thunar kitty 
   maim xclip dunst btop firefox
@@ -118,9 +120,10 @@ PACMAN_DOCKER=(
   docker docker-compose docker-buildx
 )
 
-# VMware tools
+# VMware tools - UPDATED: No xf86-video-vmware (deprecated)
+# Modern Arch uses Mesa modesetting driver
 PACMAN_VMTOOLS=(
-  open-vm-tools gtkmm3 xf86-input-vmmouse xf86-video-vmware
+  mesa open-vm-tools gtkmm3 xf86-input-libinput
 )
 
 # VPN tools
@@ -724,13 +727,55 @@ module_dev(){
 }
 
 module_vmtools(){
-  log "[vmtools] Installing VMware guest tools..."
+  log "[vmtools] Installing VMware guest tools (modern drivers)..."
+  
+  # Detect if we're in VMware
+  if lspci | grep -qi vmware; then
+    info "VMware detected - using modern Mesa modesetting driver"
+  else
+    warn "VMware not detected, but installing tools anyway"
+  fi
   
   install_pacman_pkgs "${PACMAN_VMTOOLS[@]}"
   
   info "Enabling vmtoolsd service..."
   sudo systemctl enable vmtoolsd 2>/dev/null || warn "Could not enable vmtoolsd"
   sudo systemctl start vmtoolsd 2>/dev/null || warn "Could not start vmtoolsd"
+  
+  # Remove old VMware driver configs if they exist
+  if [ -f /etc/X11/xorg.conf ]; then
+    warn "Found old xorg.conf - backing it up"
+    sudo mv /etc/X11/xorg.conf /etc/X11/xorg.conf.backup-$(date +%s) 2>/dev/null || true
+  fi
+  
+  # Create modern X configuration for VMware
+  sudo mkdir -p /etc/X11/xorg.conf.d
+  sudo tee /etc/X11/xorg.conf.d/20-modesetting.conf > /dev/null << 'EOF'
+Section "Device"
+    Identifier "VMware SVGA"
+    Driver "modesetting"
+    Option "AccelMethod" "glamor"
+EndSection
+
+Section "ServerFlags"
+    Option "AutoAddGPU" "off"
+EndSection
+EOF
+  
+  log "Created modern X configuration for VMware"
+  
+  # Add user to video group
+  if ! groups | grep -q video; then
+    info "Adding user to video group..."
+    sudo usermod -aG video "$USER" || warn "Failed to add to video group"
+  fi
+  
+  echo ""
+  warn "IMPORTANT VMware Settings:"
+  echo "  • 3D Acceleration: MUST BE DISABLED in VM settings"
+  echo "  • Video Memory: Set to 128MB or higher"
+  echo "  • After changing settings: Restart the VM"
+  echo ""
   
   log "[vmtools] Done."
 }
@@ -771,6 +816,11 @@ module_ui(){
   # Create .xinitrc
   cat > ~/.xinitrc << 'EOF'
 #!/bin/sh
+
+# Disable screen blanking
+xset s off
+xset -dpms
+
 exec i3
 EOF
   chmod +x ~/.xinitrc
@@ -1520,9 +1570,11 @@ main(){
   log "Installation complete!"
   echo ""
   info "Next steps:"
-  echo "  1. Log out and back in for group changes to take effect"
-  echo "  2. Run 'startx' to launch i3 window manager"
-  echo "  3. Use 'htb-init <machine>' to create HTB workspaces"
+  echo "  1. DISABLE 3D acceleration in VMware settings"
+  echo "  2. Restart the VM"
+  echo "  3. Log out and back in for group changes to take effect"
+  echo "  4. Run 'startx' from text console (Ctrl+Alt+F2) to launch i3"
+  echo "  5. Use 'htb-init <machine>' to create HTB workspaces"
   echo ""
 }
 
