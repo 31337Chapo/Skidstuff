@@ -65,7 +65,7 @@ PACMAN_UI=(
   mesa xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xauth
   xf86-input-libinput
   i3-wm i3status i3lock
-  feh rofi thunar kitty alacritty
+  feh rofi thunar kitty
   maim xclip dunst btop firefox
   picom
   gtk3 gtk4
@@ -73,6 +73,7 @@ PACMAN_UI=(
   papirus-icon-theme
   python-pywal imagemagick
   xfce4-terminal lxappearance
+  lsd ranger
 )
 
 # UI packages that may need AUR
@@ -83,6 +84,7 @@ AUR_UI=(
 # Optional UI (try AUR if not in repos)
 OPTIONAL_UI=(
   nitrogen
+  yazi
 )
 
 # Pentest tools - depends on python being installed
@@ -872,8 +874,7 @@ exec_always --no-startup-id picom --config ~/.config/picom/picom.conf
 
 # Keybindings - FIXED: use lowercase 'shift' to avoid escape codes
 bindsym $mod+d exec --no-startup-id rofi -show drun -theme ~/.config/rofi/neon-nord.rasi
-bindsym $mod+Return exec alacritty
-bindsym $mod+Shift+Return exec kitty
+bindsym $mod+Return exec kitty
 bindsym $mod+Shift+q kill
 bindsym $mod+Shift+c reload
 bindsym $mod+Shift+r restart
@@ -1109,54 +1110,7 @@ polybar main 2>&1 | tee -a /tmp/polybar.log & disown
 EOF
   chmod +x ~/.config/polybar/launch.sh
   
-  # Alacritty config
-  mkdir -p ~/.config/alacritty
-  cat > ~/.config/alacritty/alacritty.yml << 'EOF'
-# HTB Neon Nord Alacritty Theme
-window:
-  padding:
-    x: 10
-    y: 10
-  opacity: 0.92
-
-font:
-  normal:
-    family: JetBrainsMono Nerd Font
-  size: 11.0
-
-cursor:
-  style:
-    shape: Block
-    blinking: Never
-
-# Nord Colors (pywal will override these if installed)
-colors:
-  primary:
-    background: '#2e3440'
-    foreground: '#eceff4'
-
-  normal:
-    black:   '#3b4252'
-    red:     '#bf616a'
-    green:   '#9fef00'
-    yellow:  '#ebcb8b'
-    blue:    '#81a1c1'
-    magenta: '#b48ead'
-    cyan:    '#88c0d0'
-    white:   '#e5e9f0'
-
-  bright:
-    black:   '#4c566a'
-    red:     '#bf616a'
-    green:   '#9fef00'
-    yellow:  '#ebcb8b'
-    blue:    '#81a1c1'
-    magenta: '#b48ead'
-    cyan:    '#8fbcbb'
-    white:   '#eceff4'
-EOF
-
-  # Kitty config
+  # Kitty config (primary terminal)
   mkdir -p ~/.config/kitty
   cat > ~/.config/kitty/kitty.conf << 'EOF'
 # HTB Neon Nord Kitty Theme
@@ -1357,8 +1311,7 @@ rofi -dmenu -i -p "i3 Keybindings" -theme ~/.config/rofi/neon-nord.rasi << 'BIND
 ╚═══════════════════════════════════════════════════════════╝
 
 ┌─ ESSENTIALS ─────────────────────────────────────────────┐
-│ Mod+Enter         Terminal (Alacritty)                   │
-│ Mod+Shift+Enter   Terminal (Kitty)                       │
+│ Mod+Enter         Terminal (Kitty)                       │
 │ Mod+d             Application Launcher (Rofi)            │
 │ Mod+Shift+q       Kill Window                            │
 │ Mod+Shift+c       Reload i3 Config                       │
@@ -1406,6 +1359,8 @@ rofi -dmenu -i -p "i3 Keybindings" -theme ~/.config/rofi/neon-nord.rasi << 'BIND
 │ • Mod key is Super/Windows key (Mod4)                    │
 │ • All keybindings use lowercase 'shift' for reliability  │
 │ • Use 'htb-init <machine>' to create HTB workspaces      │
+│ • Use 'lsd' or 'll' for beautiful file listings w/ icons │
+│ • Use 'ranger' or 'yazi' for file browsing w/ previews   │
 │ • Check ~/.config/i3/config for full customization       │
 └──────────────────────────────────────────────────────────┘
 BINDINGS
@@ -1542,13 +1497,19 @@ EOF
 # HTB Neon Nord Bash Theme
 PS1='\[\033[0;32m\]┌──(\[\033[1;32m\]\u\[\033[0;32m\]@\[\033[1;32m\]\h\[\033[0;32m\])-[\[\033[1;36m\]\w\[\033[0;32m\]]\n\[\033[0;32m\]└─\[\033[1;32m\]\$\[\033[0m\] '
 
-# Aliases
-alias ll='ls -lah --color=auto'
+# Aliases - lsd for beautiful file listings with icons
+alias ls='lsd'
+alias ll='lsd -lah --color=auto'
+alias la='lsd -a'
+alias lt='lsd --tree --depth=2'
 alias grep='grep --color=auto'
 alias nmap-quick='nmap -sC -sV -oN nmap-initial'
 alias nmap-full='nmap -p- -sC -sV -oN nmap-full'
 alias serve='python -m http.server'
 alias myip='ip -4 addr show tun0 2>/dev/null | grep -oP "(?<=inet\s)\d+(\.\d+){3}" || ip -4 addr show eth0 | grep -oP "(?<=inet\s)\d+(\.\d+){3}"'
+
+# Enable color support
+export LS_COLORS="$(vivid generate nord)"
 EOF
   fi
   
