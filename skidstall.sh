@@ -5,6 +5,7 @@
 # - HTB-inspired Neon Nord theme (green #9fef00 + Nord palette)
 # - Package validation and integrity checks
 # - UPDATED: Modern VMware graphics driver support (no xf86-video-vmware)
+# - Dave0x21 i3-theme-template integration
 #
 # Usage examples:
 #   ./skidstall.sh               # interactive CLI
@@ -26,7 +27,7 @@ NC='\033[0m'
 INSTALL_LOG="/tmp/skidstall-$.log"
 FAILED_PACKAGES=()
 SUCCESSFUL_PACKAGES=()
-DEFERRED_PACKAGES=()  # Packages to handle after main installation
+DEFERRED_PACKAGES=()
 
 # Auto mode flag
 AUTO=false
@@ -189,7 +190,6 @@ check_pacman_package() {
 
 check_aur_package() {
   local pkg="$1"
-  # Check if package exists in AUR with timeout
   timeout 10 curl -s "https://aur.archlinux.org/rpc/?v=5&type=info&arg=${pkg}" 2>/dev/null | grep -q '"resultcount":1'
 }
 
@@ -203,7 +203,6 @@ ensure_sudo() {
     err "sudo is required. Install it first."
     exit 1
   fi
-  # Test sudo access
   if ! sudo -v; then
     err "sudo access required. Add your user to wheel group."
     exit 1
@@ -212,31 +211,26 @@ ensure_sudo() {
 
 # ------------------ Smart Package Fallback System ------------------
 
-# Search AUR (returns package names one per line)
 aur_search() {
   local term="$1"
   curl -s "https://aur.archlinux.org/rpc/?v=5&type=search&arg=${term}" 2>/dev/null \
     | jq -r '.results[].Name' 2>/dev/null || true
 }
 
-# Search pacman repos (returns package names one per line)
 pacman_search() {
   local term="$1"
   pacman -Ss "$term" 2>/dev/null | awk -F'/' '/^[a-z]/{print $2}' | awk '{print $1}' || true
 }
 
-# Try to resolve a missing package by searching repos and AUR
 fallback_search() {
   local pkg="$1"
   
   if $AUTO; then
-    # In auto mode, just defer for later
     warn "Package '${pkg}' not found - deferring for post-install review"
     DEFERRED_PACKAGES+=("$pkg")
     return 1
   fi
   
-  # Interactive mode - offer to search now
   echo ""
   warn "Package '${pkg}' not found in official repos."
   
@@ -246,11 +240,9 @@ fallback_search() {
     return 1
   fi
 
-  # Gather matches
   local matches=()
   mapfile -t repo_matches < <(pacman_search "${pkg}")
   mapfile -t aur_matches < <(aur_search "${pkg}")
-
   matches=("${repo_matches[@]}" "${aur_matches[@]}")
 
   if [ ${#matches[@]} -eq 0 ]; then
@@ -285,7 +277,6 @@ fallback_search() {
   local selected="${matches[$((choice_index-1))]}"
   info "Selected fallback: $selected"
 
-  # Try pacman first
   if check_pacman_package "$selected"; then
     info "Installing $selected from official repos..."
     if sudo pacman -S --noconfirm --needed "$selected" 2>&1 | tee -a "$INSTALL_LOG"; then
@@ -296,7 +287,6 @@ fallback_search() {
     fi
   fi
 
-  # Try AUR (ensure yay)
   ensure_yay || { warn "yay not available; cannot install AUR packages"; DEFERRED_PACKAGES+=("$pkg"); return 1; }
 
   if check_aur_package "$selected"; then
@@ -382,7 +372,6 @@ install_pacman_pkgs(){
   local valid_pkgs=()
   local invalid_pkgs=()
 
-  # Validate each package
   for pkg in "${pkgs[@]}"; do
     if is_package_installed "$pkg"; then
       info "  ✓ $pkg (already installed)"
@@ -396,7 +385,6 @@ install_pacman_pkgs(){
     fi
   done
 
-  # Install valid packages in batch (if any)
   if [ ${#valid_pkgs[@]} -gt 0 ]; then
     log "Installing ${#valid_pkgs[@]} validated packages..."
     if sudo pacman -S --noconfirm --needed "${valid_pkgs[@]}" 2>&1 | tee -a "$INSTALL_LOG"; then
@@ -413,7 +401,6 @@ install_pacman_pkgs(){
     fi
   fi
 
-  # Fallback for invalid packages (search AUR/alternatives)
   if [ ${#invalid_pkgs[@]} -gt 0 ]; then
     for miss in "${invalid_pkgs[@]}"; do
       warn "Attempting fallback search for: $miss"
@@ -454,14 +441,12 @@ install_aur_pkgs(){
         fi
       else
         warn "  ✗ Failed to install $pkg from AUR (error)"
-        # try fallback search for alternatives
         if ! fallback_search "$pkg"; then
           FAILED_PACKAGES+=("$pkg")
         fi
       fi
     else
       warn "  ✗ $pkg not found in AUR"
-      # try fallback search for alternatives
       if ! fallback_search "$pkg"; then
         FAILED_PACKAGES+=("$pkg")
       fi
@@ -481,7 +466,6 @@ install_optional_pkgs(){
       continue
     fi
 
-    # Try pacman first
     if check_pacman_package "$pkg"; then
       info "  Trying $pkg from official repos..."
       if sudo pacman -S --noconfirm --needed "$pkg" 2>/dev/null; then
@@ -491,7 +475,6 @@ install_optional_pkgs(){
       fi
     fi
 
-    # Try AUR if pacman failed
     if command -v yay &>/dev/null; then
       info "  Trying $pkg from AUR..."
       if yay -S --noconfirm --needed "$pkg" 2>/dev/null; then
@@ -505,7 +488,6 @@ install_optional_pkgs(){
       warn "  ✗ $pkg skipped (yay not available)"
     fi
 
-    # Fallback search if interactive or in auto
     if ! fallback_search "$pkg"; then
       warn "  ✗ $pkg skipped after fallback search"
     fi
@@ -554,7 +536,6 @@ install_pip_user_tools(){
   done
 }
 
-# Handle deferred packages after main installation
 handle_deferred_packages(){
   if [ ${#DEFERRED_PACKAGES[@]} -eq 0 ]; then
     return 0
@@ -588,7 +569,6 @@ handle_deferred_packages(){
     echo ""
     log "Searching alternatives for: $pkg"
     
-    # Gather matches
     local matches=()
     mapfile -t repo_matches < <(pacman_search "${pkg}")
     mapfile -t aur_matches < <(aur_search "${pkg}")
@@ -624,7 +604,6 @@ handle_deferred_packages(){
     local selected="${matches[$((choice-1))]}"
     info "Installing $selected..."
     
-    # Try pacman first
     if check_pacman_package "$selected"; then
       if sudo pacman -S --noconfirm --needed "$selected" 2>&1 | tee -a "$INSTALL_LOG"; then
         log "✓ $selected installed"
@@ -633,7 +612,6 @@ handle_deferred_packages(){
       fi
     fi
     
-    # Try AUR
     if command -v yay &>/dev/null && check_aur_package "$selected"; then
       if yay -S --noconfirm --needed "$selected" </dev/tty 2>&1 | tee -a "$INSTALL_LOG"; then
         log "✓ $selected installed from AUR"
@@ -646,11 +624,9 @@ handle_deferred_packages(){
     FAILED_PACKAGES+=("$pkg")
   done
   
-  # Clear deferred list as we've processed them
   DEFERRED_PACKAGES=()
 }
 
-# Show installation summary
 show_install_summary(){
   echo ""
   echo -e "${CYAN}╔════════════════════════════════════════════════════╗${NC}"
@@ -704,10 +680,8 @@ module_core(){
   info "Installing core packages..."
   install_pacman_pkgs "${PACMAN_CORE[@]}"
   
-  # Create ~/.local/bin
   mkdir -p ~/.local/bin
   
-  # Add to PATH if not present
   if ! grep -q '.local/bin' ~/.bashrc 2>/dev/null; then
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
     export PATH="$HOME/.local/bin:$PATH"
@@ -719,10 +693,7 @@ module_core(){
 module_dev(){
   log "[dev] Installing development tools..."
   
-  # Install Python and tools first
   install_pacman_pkgs "${PACMAN_DEV[@]}"
-  
-  # Ensure pipx is installed and working
   ensure_pipx
   
   log "[dev] Done."
@@ -731,7 +702,6 @@ module_dev(){
 module_vmtools(){
   log "[vmtools] Installing VMware guest tools (modern drivers)..."
   
-  # Detect if we're in VMware
   if lspci | grep -qi vmware; then
     info "VMware detected - using modern Mesa modesetting driver"
   else
@@ -744,13 +714,11 @@ module_vmtools(){
   sudo systemctl enable vmtoolsd 2>/dev/null || warn "Could not enable vmtoolsd"
   sudo systemctl start vmtoolsd 2>/dev/null || warn "Could not start vmtoolsd"
   
-  # Remove old VMware driver configs if they exist
   if [ -f /etc/X11/xorg.conf ]; then
     warn "Found old xorg.conf - backing it up"
     sudo mv /etc/X11/xorg.conf /etc/X11/xorg.conf.backup-$(date +%s) 2>/dev/null || true
   fi
   
-  # Create modern X configuration for VMware
   sudo mkdir -p /etc/X11/xorg.conf.d
   sudo tee /etc/X11/xorg.conf.d/20-modesetting.conf > /dev/null << 'EOF'
 Section "Device"
@@ -766,7 +734,6 @@ EOF
   
   log "Created modern X configuration for VMware"
   
-  # Add user to video group
   if ! groups | grep -q video; then
     info "Adding user to video group..."
     sudo usermod -aG video "$USER" || warn "Failed to add to video group"
@@ -796,13 +763,8 @@ module_networking(){
 module_ui(){
   log "[ui] Installing UI with HTB Neon Nord theme..."
   
-  # Install base UI packages from official repos
   install_pacman_pkgs "${PACMAN_UI[@]}"
-  
-  # Install UI packages from AUR
   install_aur_pkgs "${AUR_UI[@]}"
-  
-  # Install optional UI packages
   install_optional_pkgs "${OPTIONAL_UI[@]}"
   
   # Download HTB-style wallpaper
@@ -815,7 +777,40 @@ module_ui(){
     warn "Wallpaper download failed (will use feh default)"
   fi
   
-  # Create .xinitrc
+  # Install Dave0x21 i3-theme-template
+  info "Installing i3-theme-template..."
+  local theme_dir="$HOME/.config/i3-theme-template"
+  
+  if [ ! -d "$theme_dir" ]; then
+    if git clone https://github.com/Dave0x21/i3-theme-template.git "$theme_dir" 2>&1 | tee -a "$INSTALL_LOG"; then
+      log "i3-theme-template cloned successfully"
+      
+      # Make the install script executable and run it
+      if [ -f "$theme_dir/install.sh" ]; then
+        chmod +x "$theme_dir/install.sh"
+        info "Running i3-theme-template installer..."
+        cd "$theme_dir" || warn "Could not cd to theme directory"
+        
+        # Run installer non-interactively if in AUTO mode
+        if $AUTO; then
+          ./install.sh --auto 2>&1 | tee -a "$INSTALL_LOG" || warn "Theme installer failed (non-critical)"
+        else
+          ./install.sh 2>&1 | tee -a "$INSTALL_LOG" || warn "Theme installer failed (non-critical)"
+        fi
+        
+        cd - >/dev/null || true
+        log "i3-theme-template installed"
+      else
+        warn "Theme install script not found - manual setup required"
+      fi
+    else
+      warn "Failed to clone i3-theme-template (non-critical)"
+    fi
+  else
+    info "i3-theme-template already installed"
+  fi
+  
+  # Create .xinitrc with startx fix
   cat > ~/.xinitrc << 'EOF'
 #!/bin/sh
 
@@ -823,26 +818,27 @@ module_ui(){
 xset s off
 xset -dpms
 
-# Load pywal colors
-(cat ~/.cache/wal/sequences &)
-
-# Set wallpaper with pywal
-wal -R 2>/dev/null || wal -i ~/Pictures/wallpaper.jpg 2>/dev/null || true
+# Load pywal colors if available
+if command -v wal >/dev/null 2>&1; then
+    (cat ~/.cache/wal/sequences 2>/dev/null &)
+    wal -R 2>/dev/null || wal -i ~/Pictures/wallpaper.jpg 2>/dev/null || true
+fi
 
 exec i3
 EOF
   chmod +x ~/.xinitrc
   
-  # i3 config with HTB green accent
+  # i3 config with HTB green accent (Dave0x21 theme compatible)
   mkdir -p ~/.config/i3
   cat > ~/.config/i3/config << 'EOF'
 # Neon Nord Pentest i3 Config
+# NOTE: Press Mod+Shift+/ to show keybinding cheatsheet
 set $mod Mod4
 font pango:JetBrainsMono Nerd Font 10
 
-# Source pywal colors
-set_from_resource $fg i3wm.color7 #f0f0f0
-set_from_resource $bg i3wm.color2 #f0f0f0
+# Source pywal colors (if available)
+set_from_resource $fg i3wm.color7 #eceff4
+set_from_resource $bg i3wm.color2 #9fef00
 
 # HTB Neon Nord Colors
 set $bg-dark     #2e3440
@@ -874,15 +870,15 @@ exec_always --no-startup-id feh --bg-scale ~/Pictures/wallpaper.jpg || feh --bg-
 exec --no-startup-id dunst
 exec_always --no-startup-id picom --config ~/.config/picom/picom.conf
 
-# Keybindings - FIXED
+# Keybindings - FIXED: use lowercase 'shift' to avoid escape codes
 bindsym $mod+d exec --no-startup-id rofi -show drun -theme ~/.config/rofi/neon-nord.rasi
 bindsym $mod+Return exec alacritty
-bindsym $mod+shift+Return exec kitty
-bindsym $mod+shift+q kill
-bindsym $mod+shift+c reload
-bindsym $mod+shift+r restart
+bindsym $mod+Shift+Return exec kitty
+bindsym $mod+Shift+q kill
+bindsym $mod+Shift+c reload
+bindsym $mod+Shift+r restart
 
-# Navigation (vim keys) - FIXED
+# Navigation (vim keys)
 bindsym $mod+h focus left
 bindsym $mod+j focus down
 bindsym $mod+k focus up
@@ -894,19 +890,19 @@ bindsym $mod+Down focus down
 bindsym $mod+Up focus up
 bindsym $mod+Right focus right
 
-# Move windows (vim keys) - FIXED
-bindsym $mod+shift+h move left
-bindsym $mod+shift+j move down
-bindsym $mod+shift+k move up
-bindsym $mod+shift+l move right
+# Move windows (vim keys)
+bindsym $mod+Shift+h move left
+bindsym $mod+Shift+j move down
+bindsym $mod+Shift+k move up
+bindsym $mod+Shift+l move right
 
 # Arrow keys alternative
-bindsym $mod+shift+Left move left
-bindsym $mod+shift+Down move down
-bindsym $mod+shift+Up move up
-bindsym $mod+shift+Right move right
+bindsym $mod+Shift+Left move left
+bindsym $mod+Shift+Down move down
+bindsym $mod+Shift+Up move up
+bindsym $mod+Shift+Right move right
 
-# Splits - FIXED
+# Splits
 bindsym $mod+bar split h
 bindsym $mod+minus split v
 bindsym $mod+f fullscreen toggle
@@ -916,8 +912,8 @@ bindsym $mod+s layout stacking
 bindsym $mod+w layout tabbed
 bindsym $mod+e layout toggle split
 
-# Float - FIXED
-bindsym $mod+shift+space floating toggle
+# Float
+bindsym $mod+Shift+space floating toggle
 bindsym $mod+space focus mode_toggle
 
 # Workspaces (pentest workflow)
@@ -932,7 +928,7 @@ set $ws8 "8"
 set $ws9 "9"
 set $ws10 "10"
 
-# Switch to workspace - FIXED
+# Switch to workspace
 bindsym $mod+1 workspace number $ws1
 bindsym $mod+2 workspace number $ws2
 bindsym $mod+3 workspace number $ws3
@@ -944,28 +940,29 @@ bindsym $mod+8 workspace number $ws8
 bindsym $mod+9 workspace number $ws9
 bindsym $mod+0 workspace number $ws10
 
-# Move container to workspace - FIXED
-bindsym $mod+shift+1 move container to workspace number $ws1
-bindsym $mod+shift+2 move container to workspace number $ws2
-bindsym $mod+shift+3 move container to workspace number $ws3
-bindsym $mod+shift+4 move container to workspace number $ws4
-bindsym $mod+shift+5 move container to workspace number $ws5
-bindsym $mod+shift+6 move container to workspace number $ws6
-bindsym $mod+shift+7 move container to workspace number $ws7
-bindsym $mod+shift+8 move container to workspace number $ws8
-bindsym $mod+shift+9 move container to workspace number $ws9
-bindsym $mod+shift+0 move container to workspace number $ws10
+# Move container to workspace
+bindsym $mod+Shift+1 move container to workspace number $ws1
+bindsym $mod+Shift+2 move container to workspace number $ws2
+bindsym $mod+Shift+3 move container to workspace number $ws3
+bindsym $mod+Shift+4 move container to workspace number $ws4
+bindsym $mod+Shift+5 move container to workspace number $ws5
+bindsym $mod+Shift+6 move container to workspace number $ws6
+bindsym $mod+Shift+7 move container to workspace number $ws7
+bindsym $mod+Shift+8 move container to workspace number $ws8
+bindsym $mod+Shift+9 move container to workspace number $ws9
+bindsym $mod+Shift+0 move container to workspace number $ws10
 
 # System shortcuts
 bindsym Print exec --no-startup-id maim -s | xclip -selection clipboard -t image/png
-bindsym $mod+shift+x exec i3lock -c 2e3440
-bindsym $mod+shift+e exec "i3-nagbar -t warning -m 'Exit i3?' -B 'Yes, exit i3' 'i3-msg exit'"
+bindsym $mod+Shift+x exec i3lock -c 2e3440
+bindsym $mod+Shift+e exec "i3-nagbar -t warning -m 'Exit i3?' -B 'Yes, exit i3' 'i3-msg exit'"
 
 # Application shortcuts
-bindsym $mod+shift+f exec thunar
-bindsym $mod+shift+w exec firefox
+bindsym $mod+Shift+f exec thunar
+bindsym $mod+Shift+w exec firefox
+bindsym $mod+Shift+slash exec --no-startup-id ~/.local/bin/i3-keybinds
 
-# Resize mode - FIXED
+# Resize mode
 mode "resize" {
     bindsym h resize shrink width 10 px or 10 ppt
     bindsym j resize grow height 10 px or 10 ppt
@@ -1112,13 +1109,10 @@ polybar main 2>&1 | tee -a /tmp/polybar.log & disown
 EOF
   chmod +x ~/.config/polybar/launch.sh
   
-  # Alacritty config (prettier terminal)
+  # Alacritty config
   mkdir -p ~/.config/alacritty
   cat > ~/.config/alacritty/alacritty.yml << 'EOF'
 # HTB Neon Nord Alacritty Theme
-import:
-  - ~/.cache/wal/colors-alacritty.yml
-
 window:
   padding:
     x: 10
@@ -1135,7 +1129,7 @@ cursor:
     shape: Block
     blinking: Never
 
-# Nord Colors (pywal will override these)
+# Nord Colors (pywal will override these if installed)
 colors:
   primary:
     background: '#2e3440'
@@ -1161,6 +1155,8 @@ colors:
     cyan:    '#8fbcbb'
     white:   '#eceff4'
 EOF
+
+  # Kitty config
   mkdir -p ~/.config/kitty
   cat > ~/.config/kitty/kitty.conf << 'EOF'
 # HTB Neon Nord Kitty Theme
@@ -1308,8 +1304,6 @@ EOF
     timeout = 0
 EOF
   
-  log "[ui] Done. Run 'startx' to launch i3."
-  
   # Initialize pywal with wallpaper
   info "Initializing pywal color scheme..."
   if [ -f ~/Pictures/wallpaper.jpg ]; then
@@ -1347,27 +1341,90 @@ EOF
   echo "  wal-reload                   # Reload current theme"
   echo "  wal -R                       # Restore previous theme"
   echo ""
+  info "i3-theme-template installed in ~/.config/i3-theme-template"
+  echo "  See README for theme customization options"
+  echo ""
+  
+  # Create keybinding cheatsheet (Omarchy-style)
+  info "Creating keybinding cheatsheet..."
+  cat > ~/.local/bin/i3-keybinds << 'EOF'
+#!/bin/bash
+# HTB Neon Nord i3 Keybinding Cheatsheet
+
+rofi -dmenu -i -p "i3 Keybindings" -theme ~/.config/rofi/neon-nord.rasi << 'BINDINGS'
+╔═══════════════════════════════════════════════════════════╗
+║              HTB NEON NORD i3 KEYBINDINGS                ║
+╚═══════════════════════════════════════════════════════════╝
+
+┌─ ESSENTIALS ─────────────────────────────────────────────┐
+│ Mod+Enter         Terminal (Alacritty)                   │
+│ Mod+Shift+Enter   Terminal (Kitty)                       │
+│ Mod+d             Application Launcher (Rofi)            │
+│ Mod+Shift+q       Kill Window                            │
+│ Mod+Shift+c       Reload i3 Config                       │
+│ Mod+Shift+r       Restart i3                             │
+│ Mod+Shift+e       Exit i3                                │
+└──────────────────────────────────────────────────────────┘
+
+┌─ NAVIGATION (VIM-STYLE) ─────────────────────────────────┐
+│ Mod+h/j/k/l       Focus Left/Down/Up/Right              │
+│ Mod+Shift+h/j/k/l Move Window Left/Down/Up/Right        │
+│ Mod+Arrows        Focus (Arrow Keys)                     │
+│ Mod+Shift+Arrows  Move Window (Arrow Keys)              │
+└──────────────────────────────────────────────────────────┘
+
+┌─ WORKSPACES ─────────────────────────────────────────────┐
+│ Mod+1-5           Switch to Workspace 1-5                │
+│   1:recon         Reconnaissance                         │
+│   2:enum          Enumeration                            │
+│   3:exploit       Exploitation                           │
+│   4:post          Post-Exploitation                      │
+│   5:notes         Notes & Documentation                  │
+│ Mod+Shift+1-5     Move Window to Workspace              │
+└──────────────────────────────────────────────────────────┘
+
+┌─ WINDOW MANAGEMENT ──────────────────────────────────────┐
+│ Mod+f             Fullscreen Toggle                      │
+│ Mod+space         Toggle Tiling/Floating Focus          │
+│ Mod+Shift+space   Toggle Window Floating                │
+│ Mod+s             Stacking Layout                        │
+│ Mod+w             Tabbed Layout                          │
+│ Mod+e             Toggle Split Layout                    │
+│ Mod+bar (|)       Split Horizontal                       │
+│ Mod+minus (-)     Split Vertical                         │
+│ Mod+r             Resize Mode (h/j/k/l or arrows)       │
+└──────────────────────────────────────────────────────────┘
+
+┌─ APPLICATIONS ───────────────────────────────────────────┐
+│ Mod+Shift+w       Firefox                                │
+│ Mod+Shift+f       Thunar File Manager                    │
+│ Print             Screenshot (Selection)                 │
+│ Mod+Shift+x       Lock Screen                            │
+└──────────────────────────────────────────────────────────┘
+
+┌─ TIPS ───────────────────────────────────────────────────┐
+│ • Mod key is Super/Windows key (Mod4)                    │
+│ • All keybindings use lowercase 'shift' for reliability  │
+│ • Use 'htb-init <machine>' to create HTB workspaces      │
+│ • Check ~/.config/i3/config for full customization       │
+└──────────────────────────────────────────────────────────┘
+BINDINGS
+EOF
+  chmod +x ~/.local/bin/i3-keybinds
+  
+  log "Keybinding cheatsheet created. Run 'i3-keybinds' anytime!"
 }
+
 
 module_pentest(){
   log "[pentest] Installing penetration testing tools..."
   
-  # Install from official repos
   install_pacman_pkgs "${PACMAN_PENTEST[@]}"
-  
-  # Install from AUR
   install_aur_pkgs "${AUR_PENTEST[@]}"
-  
-  # Install optional tools
   install_optional_pkgs "${AUR_PENTEST_OPTIONAL[@]}"
-  
-  # Install Python tools via pipx
   install_pipx_tools "${PIPX_TOOLS[@]}"
-  
-  # Install Python tools via pip
   install_pip_user_tools "${PIP_USER_TOOLS[@]}"
   
-  # Add user to wireshark group
   if groups | grep -qv wireshark; then
     info "Adding user to wireshark group..."
     sudo usermod -aG wireshark "$USER" || warn "Failed to add to wireshark group"
@@ -1415,7 +1472,6 @@ module_workflow(){
   mkdir -p ~/htb/{active,retired,labs}
   mkdir -p ~/.local/bin
   
-  # HTB workspace initialization script
   cat > ~/.local/bin/htb-init << 'EOF'
 #!/bin/bash
 # Initialize new HTB machine workspace
@@ -1470,7 +1526,6 @@ EOF
 module_theming(){
   log "[theming] Applying final theme customizations..."
   
-  # GTK theme settings
   mkdir -p ~/.config/gtk-3.0
   cat > ~/.config/gtk-3.0/settings.ini << 'EOF'
 [Settings]
@@ -1481,7 +1536,6 @@ gtk-cursor-theme-name=Adwaita
 gtk-application-prefer-dark-theme=1
 EOF
   
-  # Bash customization
   if ! grep -q "HTB Neon Nord" ~/.bashrc 2>/dev/null; then
     cat >> ~/.bashrc << 'EOF'
 
@@ -1635,13 +1689,10 @@ run_modules(){
   done
 }
 
-# Safety check for fresh installations
 check_fresh_install(){
-  # Check if system was just installed (less than 1 hour uptime)
   local uptime_seconds=$(awk '{print int($1)}' /proc/uptime)
   local uptime_hours=$((uptime_seconds / 3600))
   
-  # Check if this is first boot after install
   if [ $uptime_hours -lt 1 ] && [ ! -f /var/lib/skidstall-ran ]; then
     warn "⚠️  FRESH INSTALLATION DETECTED"
     echo ""
@@ -1668,7 +1719,6 @@ check_fresh_install(){
     fi
   fi
   
-  # Create marker file
   sudo touch /var/lib/skidstall-ran 2>/dev/null || true
 }
 
@@ -1676,15 +1726,12 @@ main(){
   show_banner
   parse_args "$@"
   
-  # Safety check for fresh installations
   check_fresh_install
   
-  # Interactive mode if no modules specified
   if [ ${#SELECTED_MODULES[@]} -eq 0 ]; then
     interactive_module_selection
   fi
   
-  # Validate and reorder modules based on dependencies
   local ordered_modules=()
   for exec_mod in "${MODULE_EXECUTION_ORDER[@]}"; do
     for sel_mod in "${SELECTED_MODULES[@]}"; do
@@ -1699,13 +1746,8 @@ main(){
   info "Installation order: ${SELECTED_MODULES[*]}"
   echo ""
   
-  # Run selected modules
   run_modules
-  
-  # Handle any deferred packages
   handle_deferred_packages
-  
-  # Show summary
   show_install_summary
   
   echo ""
@@ -1716,9 +1758,10 @@ main(){
   echo "  2. Restart the VM"
   echo "  3. Log out and back in for group changes to take effect"
   echo "  4. Run 'startx' from text console (Ctrl+Alt+F2) to launch i3"
-  echo "  5. Use 'htb-init <machine>' to create HTB workspaces"
+  echo "  5. Press Mod+Shift+/ to view keybinding cheatsheet"
+  echo "  6. Use 'htb-init <machine>' to create HTB workspaces"
+  echo "  7. Customize themes via ~/.config/i3-theme-template"
   echo ""
 }
 
-# Run main function
 main "$@"
