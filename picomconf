@@ -1,54 +1,24 @@
-# Picom Config - VMware Optimized with Green/Purple Glow
+# Minimal Picom Config for VMware
 
-# Backend
-backend = "glx";
-glx-no-stencil = true;
-glx-no-rebind-pixmap = true;
-vsync = true;
+backend = "xrender";  # Changed from glx - more stable in VMs
+vsync = false;        # Disable vsync in VMs
 
-# Shadows (minimal for performance)
-shadow = true;
-shadow-radius = 12;
-shadow-offset-x = -7;
-shadow-offset-y = -7;
-shadow-opacity = 0.5;
-shadow-color = "#00ff88";
+# Disable shadows completely
+shadow = false;
 
-# Fading
-fading = true;
-fade-in-step = 0.03;
-fade-out-step = 0.03;
-fade-delta = 5;
+# Minimal fading
+fading = false;
 
-# Opacity
-inactive-opacity = 0.92;
+# Reduce opacity or disable
+inactive-opacity = 1.0;
 active-opacity = 1.0;
-frame-opacity = 1.0;
 
-# Opacity rules
-opacity-rule = [
-    "92:class_g = 'Alacritty'",
-    "92:class_g = 'kitty'",
-    "100:class_g = 'firefox'",
-    "100:class_g = 'Firefox'",
-    "92:class_g = 'Thunar'",
-    "85:class_g = 'Rofi'"
-];
-
-# Blur (disabled for VMware performance)
+# Disable blur
 blur-background = false;
 
-# Performance optimizations for VMware
-unredir-if-possible = false;
-detect-rounded-corners = true;
-detect-client-opacity = true;
-detect-transient = true;
-mark-wmwin-focused = true;
-mark-ovredir-focused = true;
-use-damage = true;
+# Disable rounded corners
+corner-radius = 0;
 
-# Corner radius (optional, can disable for performance)
-corner-radius = 8;
-rounded-corners-exclude = [
-    "class_g = 'Polybar'",
-];
+# Performance optimizations
+unredir-if-possible = true;
+use-damage = true;
