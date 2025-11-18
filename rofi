@@ -1,0 +1,125 @@
+* {
+    background-color: #0d0d0d;
+    text-color: #e0e0e0;
+    accent-green: #00ff88;
+    accent-purple: #b84dff;
+    border-color: #00ff88;
+    spacing: 0;
+    width: 600px;
+}
+
+window {
+    transparency: "real";
+    background-color: #0d0d0dee;
+    border: 2px;
+    border-color: @accent-green;
+    border-radius: 8px;
+}
+
+mainbox {
+    border: 0;
+    padding: 15;
+}
+
+message {
+    border: 2px 0 0;
+    border-color: @accent-purple;
+    padding: 1px;
+}
+
+textbox {
+    text-color: @accent-green;
+}
+
+listview {
+    fixed-height: 0;
+    border: 2px 0 0;
+    border-color: @accent-purple;
+    spacing: 2px;
+    scrollbar: false;
+    padding: 10px 0 0;
+}
+
+element {
+    border: 0;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+element normal.normal {
+    background-color: transparent;
+    text-color: @text-color;
+}
+
+element selected.normal {
+    background-color: @accent-purple;
+    text-color: @background-color;
+}
+
+element alternate.normal {
+    background-color: transparent;
+    text-color: @text-color;
+}
+
+element-text {
+    background-color: transparent;
+    text-color: inherit;
+}
+
+element-icon {
+    size: 24px;
+    margin: 0 10px 0 0;
+}
+
+scrollbar {
+    width: 4px;
+    border: 0;
+    handle-color: @accent-green;
+    handle-width: 8px;
+    padding: 0;
+}
+
+mode-switcher {
+    border: 2px 0 0;
+    border-color: @accent-green;
+}
+
+button {
+    spacing: 0;
+    text-color: @text-color;
+}
+
+button selected {
+    background-color: @accent-green;
+    text-color: @background-color;
+}
+
+inputbar {
+    spacing: 0;
+    text-color: @text-color;
+    padding: 5px;
+    children: [ prompt, textbox-prompt-sep, entry, case-indicator ];
+}
+
+prompt {
+    spacing: 0;
+    text-color: @accent-green;
+    font: "FiraCode Nerd Font Bold 12";
+}
+
+textbox-prompt-sep {
+    expand: false;
+    str: "❯";
+    text-color: @accent-purple;
+    margin: 0 0.3em 0 0;
+}
+
+entry {
+    spacing: 0;
+    text-color: @text-color;
+}
+
+case-indicator {
+    spacing: 0;
+    text-color: @accent-purple;
+}
