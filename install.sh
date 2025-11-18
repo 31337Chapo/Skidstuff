@@ -25,11 +25,11 @@ if [ "$EUID" -eq 0 ]; then
     exit 1
 fi
 
-echo -e "${GREEN}[1/8] Updating system...${NC}"
+echo -e "${GREEN}[1/10] Updating system...${NC}"
 sudo pacman -Syu --noconfirm
 
 if ! command -v yay &> /dev/null; then
-    echo -e "${GREEN}[2/8] Installing yay...${NC}"
+    echo -e "${GREEN}[2/10] Installing yay...${NC}"
     cd /tmp
     sudo pacman -S --needed --noconfirm git base-devel
     git clone https://aur.archlinux.org/yay.git
@@ -37,10 +37,10 @@ if ! command -v yay &> /dev/null; then
     makepkg -si --noconfirm
     cd ~
 else
-    echo -e "${GREEN}[2/8] yay already installed${NC}"
+    echo -e "${GREEN}[2/10] yay already installed${NC}"
 fi
 
-echo -e "${GREEN}[3/8] Installing packages...${NC}"
+echo -e "${GREEN}[3/10] Installing packages...${NC}"
 sudo pacman -S --needed --noconfirm \
     i3-wm \
     polybar \
@@ -60,26 +60,51 @@ sudo pacman -S --needed --noconfirm \
     papirus-icon-theme \
     ttf-fira-code \
     ttf-font-awesome \
-    noto-fonts
+    noto-fonts \
+    zsh \
+    zsh-syntax-highlighting
 
-echo -e "${GREEN}[4/8] Installing VMware tools...${NC}"
+echo -e "${GREEN}[4/10] Installing VMware tools...${NC}"
 sudo pacman -S --needed --noconfirm open-vm-tools gtkmm3 || true
 sudo systemctl enable vmtoolsd 2>/dev/null || true
 sudo systemctl start vmtoolsd 2>/dev/null || true
 
-echo -e "${GREEN}[5/8] Creating directories...${NC}"
+echo -e "${GREEN}[5/10] Creating directories...${NC}"
 mkdir -p ~/.config/{i3,polybar,alacritty,rofi,picom,fastfetch}
 mkdir -p ~/Pictures/Wallpapers
 
-echo -e "${GREEN}[6/8] Installing i3 config...${NC}"
+echo -e "${GREEN}[6/10] Downloading wallpapers...${NC}"
+cd ~/Pictures/Wallpapers
+if [ ! -d "walls" ]; then
+    git clone https://github.com/dharmx/walls.git
+    echo -e "${PURPLE}Wallpapers downloaded successfully!${NC}"
+else
+    echo -e "${PURPLE}Wallpapers already exist, skipping...${NC}"
+fi
+
+# Set a random wallpaper from the collection
+WALLPAPER=$(find ~/Pictures/Wallpapers/walls -type f \( -name "*.jpg" -o -name "*.png" \) | shuf -n 1)
+if [ -n "$WALLPAPER" ]; then
+    feh --bg-fill "$WALLPAPER"
+    echo -e "${PURPLE}Set random wallpaper: $WALLPAPER${NC}"
+fi
+cd ~
+
+echo -e "${GREEN}[7/10] Installing i3 config...${NC}"
 cat > ~/.config/i3/config << 'EOF'
 set $mod Mod4
 
 font pango:FiraCode Nerd Font 10
 
-exec_always --no-startup-id picom
-exec_always --no-startup-id feh --bg-fill ~/Pictures/Wallpapers/* 2>/dev/null || true
+exec_always --no-startup-id killall picom; picom --config ~/.config/picom/picom.conf
+exec_always --no-startup-id feh --bg-fill --randomize ~/Pictures/Wallpapers/walls/* 2>/dev/null || true
 exec_always --no-startup-id polybar
+
+# Float fastfetch window
+for_window [title="fastfetch"] floating enable
+
+# Run fastfetch on startup
+exec --no-startup-id alacritty --title fastfetch -e fastfetch
 
 gaps inner 10
 gaps outer 5
@@ -159,28 +184,44 @@ bindsym $mod+Shift+m exec alacritty -e btop
 bindsym $mod+Shift+b exec firefox
 EOF
 
-echo -e "${GREEN}[7/8] Installing other configs...${NC}"
+echo -e "${GREEN}[8/10] Installing other configs...${NC}"
 
 cat > ~/.config/picom/picom.conf << 'EOF'
 backend = "glx";
 vsync = true;
 
+# Remove all shadow/glow settings
 shadow = false;
+
 fading = false;
 
-inactive-opacity = 0.90;
+# Transparency
+inactive-opacity = 1.0;
 active-opacity = 1.0;
 frame-opacity = 1.0;
+inactive-opacity-override = false;
 
+# Opacity rules
 opacity-rule = [
-    "90:class_g = 'Alacritty'",
-    "90:class_g = 'Thunar'"
+  "50:class_g = 'Alacritty'",
+  "90:class_g = 'Thunar'"
 ];
 
-blur-background = false;
+# Background blur - INCREASED strength
+blur-background = true;
+blur-method = "kernel";
+blur-size = 16;
+blur-deviation = 8.0;
+blur-kern = "15x15gaussian";
+blur-background-fixed = false;
+blur-background-exclude = [
+  "window_type = 'dock'",
+  "window_type = 'desktop'",
+  "class_g = 'Polybar'",
+  "class_g = 'i3-frame'"
+];
 
 corner-radius = 0;
-
 detect-rounded-corners = true;
 detect-client-opacity = true;
 use-damage = true;
@@ -235,7 +276,7 @@ EOF
 
 cat > ~/.config/alacritty/alacritty.toml << 'EOF'
 [window]
-opacity = 0.90
+opacity = 0.50
 padding = { x = 10, y = 10 }
 decorations = "none"
 
@@ -342,18 +383,23 @@ cat > ~/.config/fastfetch/config.jsonc << 'EOF'
 }
 EOF
 
+echo -e "${GREEN}[9/10] Setting up zsh syntax highlighting...${NC}"
+# Setup zsh syntax highlighting
+echo "source /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" >> ~/.zshrc 2>/dev/null || true
+
 # Remove fastfetch from shell configs if it exists
 sed -i '/fastfetch/d' ~/.bashrc 2>/dev/null || true
 sed -i '/fastfetch/d' ~/.zshrc 2>/dev/null || true
 
-echo -e "${GREEN}[8/8] Done!${NC}"
+echo -e "${GREEN}[10/10] Done!${NC}"
 echo ""
 echo -e "${PURPLE}Installation complete!${NC}"
 echo ""
 echo -e "Next steps:"
 echo -e "1. Log out and select i3 at login screen"
-echo -e "2. Add wallpapers to ~/Pictures/Wallpapers/"
+echo -e "2. Random wallpaper from dharmx/walls has been set!"
 echo -e "3. Press Super+Shift+r to reload i3"
+echo -e "4. Run: ${GREEN}chsh -s /usr/bin/zsh${NC} to set zsh as default (restart terminal after)"
 echo ""
 echo -e "Keybindings:"
 echo -e "  Super+Enter       - Terminal"
@@ -361,4 +407,10 @@ echo -e "  Super+d           - App launcher"
 echo -e "  Super+Shift+q     - Close window"
 echo -e "  Super+Shift+m     - System monitor"
 echo -e "  Super+Shift+f     - File manager"
+echo -e "  Super+Shift+b     - Firefox"
 echo ""
+echo -e "${PURPLE}Features:${NC}"
+echo -e "  ✓ Transparent terminals with blur effect"
+echo -e "  ✓ Fastfetch launches in floating window on startup"
+echo -e "  ✓ Random wallpaper from dharmx/walls collection"
+echo -e "  ✓ Zsh syntax highlighting enabled"
